@@ -1,0 +1,4 @@
+python-pptx>=0.6.21
+click>=8.0.0
+lxml>=4.9.0
+Pillow>=9.0.0
