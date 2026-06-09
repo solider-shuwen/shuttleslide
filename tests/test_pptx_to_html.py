@@ -4,7 +4,8 @@ Tests for PPTX to HTML conversion.
 
 import pytest
 from pathlib import Path
-from shuttleslide.pptx_to_html.parser import PPTXParser, TextElement, TableElement
+from shuttleslide.pptx_to_html.parser import PPTXParser
+from shuttleslide.pptx_to_html.models import TextElement, TableElement
 from shuttleslide.pptx_to_html.converters.text import TextConverter
 from shuttleslide.pptx_to_html.converters.tables import TableConverter
 from shuttleslide.pptx_to_html.layouts.flow import FlowLayout
