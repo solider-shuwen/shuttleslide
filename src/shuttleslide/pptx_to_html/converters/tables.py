@@ -4,7 +4,7 @@ Table Converter - converts table elements to HTML.
 
 from typing import List
 from html import escape
-from shuttleslide.pptx_to_html.parser import TableElement
+from shuttleslide.pptx_to_html.models import TableElement
 
 
 class TableConverter:
@@ -26,7 +26,7 @@ class TableConverter:
             return ""
 
         # Build table HTML
-        html_parts = ["<table"]
+        html_parts = ["<table "]
 
         # Add styling and data attributes
         table_attrs = self._build_table_attributes(element)
@@ -73,7 +73,10 @@ class TableConverter:
         attrs = []
 
         # Add styling
-        styles = []
+        styles = [
+            "border: 1px solid #000",
+            "padding: 4px",
+        ]
         if bg_color:
             styles.append(f"background-color: {bg_color}")
 
@@ -101,10 +104,12 @@ class TableConverter:
         """
         attrs = []
 
-        # Add styling
+        # Add styling - use percentage for width to allow responsiveness
         styles = [
-            f"width: {element.width}px",
-            f"height: {element.height}px",
+            f"width: 100%",
+            f"height: 100%",
+            f"border-collapse: collapse",
+            f"border: 1px solid #000",
         ]
         attrs.append(f'style="{"; ".join(styles)}"')
 
@@ -156,7 +161,7 @@ class TableConverter:
         if element.rows == 0 or element.cols == 0:
             return ""
 
-        html_parts = ["<table"]
+        html_parts = ["<table "]
 
         # Add styling and data attributes
         table_attrs = self._build_table_attributes(element)

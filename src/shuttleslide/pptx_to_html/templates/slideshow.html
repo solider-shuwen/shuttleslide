@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset='UTF-8'>
+    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+    <title>{{ title }}</title>
+    <style>
+        {{ styles|safe }}
+    </style>
+</head>
+<body>
+    <div class='reveal'>
+        <div class='slides'>
+            {% for slide in slides %}
+            <section data-slide-number='{{ slide.slide_number }}' {% if slide.hidden %}class='hidden-slide'{% endif %} {% if slide.has_animations %}data-has-animations='true'{% endif %}>
+                <div class='slide-container' {% if slide.background_style %}style='{{ slide.background_style }}'{% endif %}>
+                    {% for element in slide.elements %}
+                        {{ element.html|safe }}
+                    {% endfor %}
+                </div>
+            </section>
+            {% endfor %}
+        </div>
+    </div>
+    <script>
+        {{ script|safe }}
+    </script>
+</body>
+</html>

@@ -147,3 +147,10 @@ Thumbs.db
 *.pptx
 test_output/
 temp/
+output_assets/
+pptx-to-html5-main/
+ECMA-376-1_5th_edition_december_2016/
+.claude/
+CLAUDE.md
+intro.md
+.gitignore

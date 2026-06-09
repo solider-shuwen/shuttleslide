@@ -11,6 +11,7 @@ import click
 from shuttleslide.pptx_to_html.parser import PPTXParser
 from shuttleslide.pptx_to_html.layouts.flow import FlowLayout
 from shuttleslide.pptx_to_html.layouts.absolute import AbsoluteLayout
+from shuttleslide.pptx_to_html.layouts.slideshow import SlideshowLayout
 
 
 @click.group()
@@ -30,9 +31,9 @@ def main():
 @click.option("-o", "--output", type=click.Path(), help="Output HTML file path")
 @click.option(
     "--layout",
-    type=click.Choice(["flow", "absolute"], case_sensitive=False),
-    default="flow",
-    help="Layout mode: 'flow' for natural flow, 'absolute' for exact positioning",
+    type=click.Choice(["flow", "absolute", "slideshow"], case_sensitive=False),
+    default="slideshow",
+    help="Layout mode: 'flow' for natural flow, 'absolute' for exact positioning, 'slideshow' for interactive presentation (default)",
 )
 @click.option("--stdout", is_flag=True, help="Output to stdout instead of file")
 @click.option(
@@ -44,6 +45,18 @@ def main():
 @click.option(
     "--verbose", "-v", is_flag=True, help="Show verbose output during conversion"
 )
+@click.option(
+    "--animations", is_flag=True, default=True,
+    help="Enable CSS animations for slide elements (default: enabled)"
+)
+@click.option(
+    "--no-animations", is_flag=True,
+    help="Disable CSS animations for slide elements"
+)
+@click.option(
+    "--base64", is_flag=True,
+    help="Embed images as base64 in HTML (default: save as separate files for better performance)"
+)
 def to_html(
     input_pptx: str,
     output: Optional[str],
@@ -51,6 +64,9 @@ def to_html(
     stdout: bool,
     theme: str,
     verbose: bool,
+    animations: bool,
+    no_animations: bool,
+    base64: bool,
 ):
     """
     Convert PPTX file to HTML.
@@ -88,10 +104,15 @@ def to_html(
             click.echo(f"Title: {metadata['title']}")
 
         # Select layout
+        enable_animations = animations and not no_animations
+        use_base64 = base64  # Default is False (external files), True only when --base64 is specified
+
         if layout == "flow":
             layout_engine = FlowLayout()
-        else:  # absolute
-            layout_engine = AbsoluteLayout()
+        elif layout == "absolute":
+            layout_engine = AbsoluteLayout(use_base64=use_base64)
+        else:  # slideshow
+            layout_engine = SlideshowLayout(enable_animations=enable_animations, use_base64=use_base64)
 
         # Convert to HTML
         if verbose:

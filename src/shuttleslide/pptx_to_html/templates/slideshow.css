@@ -1,0 +1,310 @@
+/* Base reset */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+/* Set default line-height only on containers, not all elements */
+body, .slide-container, .slide-element {
+    line-height: 1;
+}
+
+/* Body and reveal container */
+html, body {
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+}
+
+body {
+    background-color: #000;
+    font-family: 'Arial', sans-serif;
+}
+
+.reveal {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    touch-action: none;
+}
+
+.reveal .slides {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    perspective: 1000px;
+}
+
+/* Slide sections */
+.reveal section {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.5s ease-in-out, transform 0.5s ease-in-out;
+    transform: translateX(100%);
+    pointer-events: none;
+}
+
+.reveal section.present {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(0);
+    pointer-events: auto;
+    z-index: 10;
+    transform-style: preserve-3d;
+}
+
+.reveal section.past {
+    transform: translateX(-100%);
+}
+
+.reveal section.future {
+    transform: translateX(100%);
+}
+
+/* Hidden slides */
+.reveal section.hidden-slide {
+    display: none !important;
+}
+
+/* Slide container */
+.slide-container {
+    position: relative;
+    width: {{ slide_width }}px;
+    height: {{ slide_height }}px;
+    margin: 0 auto;
+    background-color: white;
+    overflow: hidden;
+    transform-style: preserve-3d;
+}
+
+/* Scale slides to fit viewport */
+.reveal {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.reveal .slides {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.reveal section {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Slide elements */
+.slide-element {
+    position: absolute;
+}
+
+/* Shape wrapper styles - Critical for shape visibility */
+.shape-wrapper {
+    position: absolute;
+    display: block;
+    pointer-events: auto;
+    opacity: 1 !important;
+    visibility: visible !important;
+}
+
+.shape-svg-inner {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+/* Ensure SVG shapes are visible */
+svg.shape-svg-inner {
+    display: block;
+    opacity: 1 !important;
+    visibility: visible !important;
+    pointer-events: auto;
+}
+
+/* Ensure shapes work with animations - Override all inherited visibility properties */
+.shape-wrapper,
+.shape-wrapper svg,
+.shape-wrapper svg * {
+    opacity: 1 !important;
+    visibility: visible !important;
+}
+
+/* Multi-level bullet paragraphs */
+.bullet-paragraph {
+    display: flex;
+    align-items: baseline;
+}
+
+.bullet-paragraph .bullet {
+    flex-shrink: 0;
+    line-height: 1;
+    /* width set inline per paragraph (= PPT marL) so wrapped text aligns */
+}
+
+.bullet-paragraph .bullet img {
+    display: inline-block;
+    vertical-align: middle;
+}
+
+.bullet-paragraph .text {
+    flex-grow: 1;
+}
+
+.text-paragraph {
+    margin: 0;
+    padding: 0;
+}
+
+/* Animations */
+/* Use individual 'translate' property instead of 'transform' so that
+   element-level 3D transforms (perspective, rotateX/Y) are not overridden. */
+@keyframes slideIn {
+    from {
+        opacity: 0;
+        translate: 0 20px;
+    }
+    to {
+        opacity: 1;
+        translate: 0 0;
+    }
+}
+
+/* Controls */
+.reveal .controls {
+    position: absolute;
+    bottom: 20px;
+    right: 20px;
+    display: flex;
+    gap: 10px;
+    z-index: 1000;
+}
+
+.reveal .controls button {
+    background-color: rgba(0, 0, 0, 0.5);
+    color: white;
+    border: none;
+    border-radius: 50%;
+    width: 50px;
+    height: 50px;
+    font-size: 24px;
+    cursor: pointer;
+    transition: background-color 0.3s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.reveal .controls button:hover {
+    background-color: rgba(0, 0, 0, 0.8);
+}
+
+.reveal .controls button:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+/* Progress bar */
+.reveal .progress {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    height: 3px;
+    background-color: rgba(255, 255, 255, 0.2);
+    width: 100%;
+    z-index: 1000;
+}
+
+.reveal .progress-bar {
+    height: 100%;
+    background-color: rgba(255, 255, 255, 0.8);
+    transition: width 0.3s ease;
+}
+
+/* Slide number */
+.reveal .slide-number {
+    position: absolute;
+    bottom: 20px;
+    left: 20px;
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 14px;
+    z-index: 1000;
+}
+
+/* Responsive scaling */
+@media (max-width: {{ slide_width_plus_100 }}px) {
+    .slide-container {
+        transform: scale(0.8);
+    }
+}
+
+@media (max-width: {{ slide_width_80pct }}px) {
+    .slide-container {
+        transform: scale(0.6);
+    }
+}
+
+@media (max-width: {{ slide_width_60pct }}px) {
+    .slide-container {
+        transform: scale(0.4);
+    }
+    .reveal .controls button {
+        width: 40px;
+        height: 40px;
+        font-size: 18px;
+    }
+}
+
+/* Print styles */
+@media print {
+    body {
+        height: auto;
+        overflow: visible;
+        background-color: white;
+    }
+
+    .reveal {
+        position: static;
+        height: auto;
+    }
+
+    .reveal .slides {
+        height: auto;
+        perspective: none;
+    }
+
+    .reveal section {
+        position: relative;
+        opacity: 1;
+        visibility: visible;
+        transform: none;
+        page-break-after: always;
+        margin-bottom: 20px;
+        display: block;
+    }
+
+    .slide-container {
+        margin: 0;
+        page-break-inside: avoid;
+    }
+
+    .reveal .controls,
+    .reveal .progress,
+    .reveal .slide-number {
+        display: none;
+    }
+
+    .slide-element {
+        animation: none !important;
+        opacity: 1 !important;
+    }
+}
