@@ -3,16 +3,14 @@ Slideshow Layout - converts slides to HTML with interactive slideshow navigation
 Uses percentage-based responsive positioning for accurate layout preservation.
 """
 
-from pathlib import Path
 from typing import List, Dict, Any, Optional
-from jinja2 import Environment, FileSystemLoader
-import base64
 
 from shuttleslide.pptx_to_html.models import (
     ParsedSlide, SlideElement, TextElement, GroupElement,
     calculate_position_percentages,
 )
 from shuttleslide.pptx_to_html.layouts.base import BaseLayout
+from shuttleslide.pptx_to_html.utils.units import scene3d_to_css
 
 
 class SlideshowLayout(BaseLayout):
@@ -21,21 +19,18 @@ class SlideshowLayout(BaseLayout):
     Only one slide is visible at a time with keyboard/mouse/touch navigation.
     """
 
-    def __init__(self, enable_animations: bool = True, use_base64: bool = False):
+    def __init__(self, enable_animations: bool = True, use_base64: bool = False, output_dir: str = None):
         """
         Initialize the slideshow layout with converters and templates.
 
         Args:
             enable_animations: Whether to enable CSS animations for slide elements
             use_base64: Whether to embed images as base64 (True) or save as separate files (False, default).
+            output_dir: Directory for saving image assets relative to the output HTML.
         """
-        super().__init__(use_base64=use_base64)
+        super().__init__(use_base64=use_base64, output_dir=output_dir)
         self.enable_animations = enable_animations
         self.use_base64 = use_base64
-
-        # Initialize Jinja2 environment
-        template_dir = Path(__file__).parent.parent / "templates"
-        self.env = Environment(loader=FileSystemLoader(template_dir))
 
     def convert(self, slides: List[ParsedSlide]) -> str:
         """
@@ -104,90 +99,6 @@ class SlideshowLayout(BaseLayout):
             script=script
         )
 
-    def _get_background_style(self, slide: ParsedSlide) -> Optional[str]:
-        """
-        Generate CSS background string from ParsedSlide.background.
-
-        Args:
-            slide: ParsedSlide with optional background data
-
-        Returns:
-            CSS background property string or None
-        """
-        if not slide.background:
-            return None
-        bg = slide.background
-        if bg.bg_type == 'solid' and bg.color:
-            return f"background-color: {bg.color}"
-        elif bg.bg_type == 'gradient' and bg.gradient_css:
-            return f"background: {bg.gradient_css}"
-        elif bg.bg_type == 'image' and bg.image_data:
-            mime = f"image/{bg.image_data['image_type']}"
-            encoded = base64.b64encode(bg.image_data['image_bytes']).decode('utf-8')
-            parts = [f'background-image: url("data:{mime};base64,{encoded}")']
-            parts.append('background-size: cover')
-
-            # If there's a semi-transparent overlay, use CSS multiple backgrounds
-            # Layer the gradient on top of the image
-            if bg.overlay_color and bg.overlay_opacity is not None:
-                r = int(bg.overlay_color[1:3], 16)
-                g = int(bg.overlay_color[3:5], 16)
-                b = int(bg.overlay_color[5:7], 16)
-                rgba = f"rgba({r},{g},{b},{bg.overlay_opacity:.2f})"
-                parts[0] = (
-                    f'background-image: linear-gradient({rgba}, {rgba}), '
-                    f'url("data:{mime};base64,{encoded}")'
-                )
-            return "; ".join(parts)
-        return None
-
-    def _empty_html(self) -> str:
-        """Return HTML for empty presentation."""
-        return """<!DOCTYPE html>
-<html>
-<head>
-    <meta charset='UTF-8'>
-    <title>Empty Presentation</title>
-</head>
-<body style='display:flex;justify-content:center;align-items:center;height:100vh;margin:0;font-family:Arial,sans-serif;'>
-    <div style='text-align:center'>
-        <h1>Empty Presentation</h1>
-        <p>No slides found in this presentation.</p>
-    </div>
-</body>
-</html>"""
-
-    def _convert_slide(self, slide: ParsedSlide, index: int) -> str:
-        """
-        Convert a single slide to HTML section.
-
-        Args:
-            slide: ParsedSlide to convert
-            index: Slide index (0-based)
-
-        Returns:
-            HTML section string
-        """
-        html_parts = [
-            f"<section data-slide-number='{slide.slide_number}'>",
-        ]
-
-        # Add slide container with absolute positioning
-        html_parts.append("        <div class='slide-container'>")
-
-        # Sort elements by z-order and convert with absolute positioning
-        sorted_elements = sorted(slide.elements, key=lambda e: e.z_order)
-
-        for element in sorted_elements:
-            element_html = self._convert_element_absolute(element, slide)
-            if element_html:
-                html_parts.append(f"            {element_html}")
-
-        html_parts.append("        </div>")
-        html_parts.append("    </section>")
-
-        return "\n".join(html_parts)
-
     def _convert_element_absolute(self, element: SlideElement, slide: ParsedSlide) -> str:
         """
         Convert a single element to HTML with absolute positioning.
@@ -234,8 +145,8 @@ class SlideshowLayout(BaseLayout):
         # Calculate percentage positions
         pct = calculate_position_percentages(element, slide.width, slide.height)
 
-        # Build inline styles with percentage positioning
-        styles = [
+        # Build position styles (percentage-based)
+        position_styles = [
             f"position: absolute",
             f"left: {pct['left_pct']:.3f}%",
             f"top: {pct['top_pct']:.3f}%",
@@ -244,71 +155,16 @@ class SlideshowLayout(BaseLayout):
             f"z-index: {element.z_order}",
         ]
 
-        # Apply vertical alignment using CSS
-        # For center/bottom alignment, we adjust the content position within the element
-        if element.vertical_align == 'middle':
-            styles.append("display: flex")
-            styles.append("align-items: center")
-            styles.append("justify-content: center")
-        elif element.vertical_align == 'bottom':
-            styles.append("display: flex")
-            styles.append("align-items: flex-end")
-            styles.append("justify-content: center")
+        # Decoration styles from shared helper
+        decoration_styles = self._build_text_decoration_styles(element)
 
-        # Apply font styling if available
-        if element.font_name:
-            styles.append(f"font-family: '{element.font_name}', Arial, sans-serif")
-        if element.font_size:
-            styles.append(f"font-size: {element.font_size}pt")
-        if element.bold:
-            styles.append("font-weight: bold")
-        if element.italic:
-            styles.append("font-style: italic")
-        if element.color:
-            styles.append(f"color: {element.color}")
-
-        # Add white-space preservation for text
-        styles.append("white-space: pre-wrap")
-        # Text elements with multiple paragraphs may need overflow visible
-        # to avoid clipping when line-height differs from PPTX default
-        if not element.paragraphs or len(element.paragraphs) <= 1:
-            styles.append("overflow: hidden")
-
-        # Apply rotation and transform styles
-        transform_parts = []
-
-        # Handle vertical text (writing-mode is a separate CSS property, not a transform)
-        if element.vert:
-            # East Asian vertical text
-            if element.vert == 'eaVert':
-                # For eaVert, use writing-mode: vertical-rl
-                styles.append("writing-mode: vertical-rl")
-            elif element.vert == 'mongolianVert':
-                styles.append("writing-mode: vertical-rl")
-            elif element.vert == 'wordVert':
-                styles.append("writing-mode: vertical-lr")
-        else:
-            # For non-vertical text, handle flips
-            if element.flip_h:
-                transform_parts.append("scaleX(-1)")
-
-        if element.flip_v:
-            transform_parts.append("scaleY(-1)")
-
-        if element.rotation:
-            transform_parts.append(f"rotate({element.rotation}deg)")
-
-        # Combine all transforms
-        if transform_parts:
-            styles.append(f"transform: {' '.join(transform_parts)}")
-
-        # Animation
+        # Animation (SlideshowLayout-specific)
+        animation_styles = []
         if self.enable_animations:
-            styles.append(f"animation: slideIn 0.5s ease-out {element.z_order * 0.05}s both")
+            animation_styles.append(f"animation: slideIn 0.5s ease-out {element.z_order * 0.05}s both")
 
-        style_str = "; ".join(styles) + ";"
-
-        return f"<div class='slide-element text-element' style=\"{style_str}\">{text_html}</div>"
+        all_styles = position_styles + decoration_styles + animation_styles
+        return self._build_text_wrapper_html(text_html, all_styles, "slide-element text-element")
 
     def _convert_table_absolute(self, element: SlideElement, slide: ParsedSlide) -> str:
         """
@@ -413,23 +269,31 @@ class SlideshowLayout(BaseLayout):
 
     def _convert_group_absolute(self, element: GroupElement, slide: ParsedSlide) -> str:
         """
-        Flatten group children to slide-absolute positions.
+        Convert group children to HTML.
 
-        Instead of wrapping children in a group container with group-relative
-        percentages, we compute each child's slide-absolute coordinates and
-        render them directly on the slide. This avoids group expansion issues
-        when children extend beyond the group's declared bounds.
+        For groups with scene3d, renders a wrapper div with the 3D transform,
+        keeping children in group-relative positions inside the wrapper.
+        For other groups, flattens children to slide-absolute positions.
 
         Args:
             element: GroupElement with children
             slide: ParsedSlide for percentage calculations
 
         Returns:
-            HTML string with all children rendered at slide-absolute positions
+            HTML string with all children rendered
         """
         if not element.children:
             return ""
 
+        # Check if this group has a scene3d camera transform
+        scene3d_camera = None
+        if element.metadata and element.metadata.get('scene3d_camera'):
+            scene3d_camera = element.metadata['scene3d_camera']
+
+        if scene3d_camera:
+            return self._convert_group_scene3d(element, slide, scene3d_camera)
+
+        # Flatten: render children at slide-absolute positions
         children_html = []
         for child in element.children:
             # Save original group-relative position
@@ -454,6 +318,73 @@ class SlideshowLayout(BaseLayout):
                 children_html.append(child_html)
 
         return "\n".join(children_html)
+
+    def _convert_group_scene3d(self, element: GroupElement, slide: ParsedSlide, camera: str) -> str:
+        """
+        Render a scene3d group as a wrapper div with 3D transform,
+        children positioned relative to the wrapper.
+
+        Args:
+            element: GroupElement with scene3d
+            slide: ParsedSlide for percentage calculations
+            camera: scene3d camera preset name
+
+        Returns:
+            HTML string with 3D-transformed group wrapper
+        """
+        css_3d = scene3d_to_css(camera)
+
+        # Wrapper positioned at group's slide-absolute position
+        pct = calculate_position_percentages(element, slide.width, slide.height)
+
+        wrapper_styles = [
+            f"position: absolute",
+            f"left: {pct['left_pct']:.3f}%",
+            f"top: {pct['top_pct']:.3f}%",
+            f"width: {pct['width_pct']:.3f}%",
+            f"height: {pct['height_pct']:.3f}%",
+            f"z-index: {element.z_order}",
+        ]
+
+        if css_3d:
+            wrapper_styles.append(f"transform: {css_3d}")
+        wrapper_styles.append("transform-style: preserve-3d")
+
+        if self.enable_animations:
+            wrapper_styles.append(f"animation: slideIn 0.5s ease-out {element.z_order * 0.05}s both")
+
+        # Remove scene3d from children so they don't get individual 3D transforms
+        self._remove_scene3d_recursive(element.children)
+
+        # Render children at group-relative positions
+        children_html = []
+        for child in element.children:
+            # Children are already in group-relative coordinates
+            # Convert to percentages relative to the group
+            child_pct = calculate_position_percentages(child, element.width, element.height)
+
+            if child.element_type == "image":
+                child_html = self.image_converter.convert_with_wrapper(child, child_pct)
+                child_html = child_html.replace(
+                    'class="image-wrapper"',
+                    'class="slide-element image-wrapper"'
+                )
+                if self.enable_animations:
+                    anim = f"animation: slideIn 0.5s ease-out {child.z_order * 0.05}s both;"
+                    child_html = child_html.replace('style="', f'style="{anim}')
+            elif child.element_type == "shape":
+                child_html = self.shape_converter.convert(child, child_pct)
+            elif child.element_type == "text":
+                child_html = self._convert_text_absolute(child, slide)
+            else:
+                continue
+
+            if child_html:
+                children_html.append(child_html)
+
+        style_str = "; ".join(wrapper_styles)
+        inner = "\n".join(children_html)
+        return f"<div class='slide-element group-3d-wrapper' style='{style_str}'>\n{inner}\n</div>"
 
     def _expand_group_bounds(self, element: GroupElement, ref_width: float, ref_height: float) -> dict:
         """Expand group bounds to encompass all children, clamped to reference boundaries.
@@ -541,6 +472,10 @@ class SlideshowLayout(BaseLayout):
                 "white-space: pre-wrap",
                 "overflow: hidden",
             ]
+            # Apply border/outline if present
+            if child.line_color:
+                border_width = child.line_width if child.line_width else 1
+                styles.append(f"border: {border_width}px solid {child.line_color}")
             style_str = "; ".join(styles) + ";"
             return f"<div class='slide-element text-element' style=\"{style_str}\">{text_html}</div>"
 

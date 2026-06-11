@@ -41,3 +41,26 @@ def px_to_emu(px):
 def angle_to_degrees(angle_units):
     """Convert OpenXML angle units (1/60000 degree) to degrees."""
     return angle_units / ANGLE_UNITS_PER_DEGREE
+
+
+# Scene3D isometric camera preset → CSS transform mapping.
+# PPT uses orthographic (parallel) projection for isometric cameras.
+# We use perspective(99999px) to approximate orthographic projection,
+# preventing the parent container's perspective from distorting elements.
+# Isometric tilt angle: arctan(1/sqrt(2)) ≈ 35.264° (standard).
+_ISOMETRIC_CAMERA_MAP = {
+    'isometricRightUp':   "perspective(99999px) rotateX(35.264deg) rotateY(-45deg)",
+    'isometricLeftUp':    "perspective(99999px) rotateX(35.264deg) rotateY(45deg)",
+    'isometricTopUp':     "perspective(99999px) rotateX(54.736deg) rotateZ(45deg)",
+    'isometricBottomUp':  "perspective(99999px) rotateX(-54.736deg) rotateZ(45deg)",
+    'isometricRightDown': "perspective(99999px) rotateX(-35.264deg) rotateY(-45deg)",
+    'isometricLeftDown':  "perspective(99999px) rotateX(-35.264deg) rotateY(45deg)",
+}
+
+
+def scene3d_to_css(camera_preset: str):
+    """Convert a scene3D camera preset name to a CSS transform string.
+
+    Returns None if the camera preset is not recognized.
+    """
+    return _ISOMETRIC_CAMERA_MAP.get(camera_preset)

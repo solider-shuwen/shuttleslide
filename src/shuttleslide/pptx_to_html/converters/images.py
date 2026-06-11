@@ -131,7 +131,7 @@ class ImageConverter:
 
         # Create assets directory if needed
         if self.output_dir is None:
-            # Use default assets directory
+            # Use default assets directory (relative to CWD)
             assets_dir = os.path.join("output_assets", "images")
         else:
             assets_dir = os.path.join(self.output_dir, "images")
@@ -146,8 +146,10 @@ class ImageConverter:
         with open(filepath, 'wb') as f:
             f.write(element.image_bytes)
 
-        # Return relative path for HTML (use forward slashes for web compatibility)
-        return f"{assets_dir.replace(os.sep, '/')}/{filename}"
+        # Return relative path: "output_assets/images/filename"
+        # Always use just the last two path components for portability
+        rel_path = os.path.join("output_assets", "images", filename)
+        return rel_path.replace(os.sep, '/')
 
     def _get_file_extension(self, image_type: str) -> str:
         """
@@ -162,6 +164,8 @@ class ImageConverter:
         # Handle common formats
         if image_type.lower() in ['png', 'jpeg', 'jpg', 'gif', 'bmp', 'webp']:
             return f".{image_type.lower()}"
+        elif image_type.lower() in ['svg', 'svg+xml']:
+            return ".svg"
         elif image_type.lower() in ['emf', 'wmf']:
             # For metafiles, convert to PNG
             return ".png"
@@ -187,6 +191,8 @@ class ImageConverter:
             "bmp": "image/bmp",
             "tiff": "image/tiff",
             "webp": "image/webp",
+            "svg": "image/svg+xml",
+            "svg+xml": "image/svg+xml",
             "emf": "image/x-emf",  # Enhanced Metafile
             "wmf": "image/x-wmf",  # Windows Metafile
         }
@@ -254,6 +260,15 @@ class ImageConverter:
                 wrapper_styles.append("transform: perspective(99999px) rotateX(-35.264deg) rotateY(45deg)")
             elif camera == 'isometricBottomUp':
                 wrapper_styles.append("transform: perspective(99999px) rotateX(-54.736deg) rotateZ(45deg)")
+
+        # Apply rotation (combine with scene3d if present)
+        if element.rotation:
+            if element.metadata and element.metadata.get('scene3d_camera'):
+                # Append rotation to existing transform (each CSS transform function is independent)
+                existing = wrapper_styles[-1]
+                wrapper_styles[-1] = existing + f" rotateZ({element.rotation}deg)"
+            else:
+                wrapper_styles.append(f"transform: rotate({element.rotation}deg)")
 
         wrapper_attrs.append(f'style="{"; ".join(wrapper_styles)}"')
         wrapper_attrs.append(f'data-pptx-wrapper="image"')

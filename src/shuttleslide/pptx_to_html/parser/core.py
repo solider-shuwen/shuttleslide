@@ -87,6 +87,7 @@ class PPTXParser(
 
         # Current slide's master reference (set per-slide during parsing)
         self._current_master = None
+        self._current_layout = None
 
         self._extract_master_default_spacing()
         self._extract_master_text_styles()
@@ -144,10 +145,12 @@ class PPTXParser(
 
         # Set current master for per-master style lookups during shape parsing
         self._current_master = None
+        self._current_layout = None
         try:
             layout = slide.slide_layout
             if layout is not None:
                 self._current_master = layout.slide_master
+                self._current_layout = layout
         except Exception:
             pass
 
@@ -325,10 +328,24 @@ class PPTXParser(
             # Clear text on shape element to avoid duplicate text rendering
             shape_element.text = None
 
+            # Propagate scene3d camera metadata so text gets the same 3D transform
+            if shape_element.metadata and shape_element.metadata.get('scene3d_camera'):
+                if text_element.metadata is None:
+                    text_element.metadata = {}
+                text_element.metadata['scene3d_camera'] = shape_element.metadata['scene3d_camera']
+
+            # When a shape has visual geometry (SVG), the outline/border is rendered
+            # by the shape SVG, not as CSS border on the text element.
+            # Clear line_color on the text overlay to avoid a rectangular border
+            # that incorrectly overlaps the shape geometry.
+            text_element.line_color = None
+            text_element.line_width = None
+
             # Only include shape element if it has visible geometry
-            # (fill, stroke, image fill, or custom geometry like FREEFORM paths)
+            # (fill, stroke, image fill, gradient fill, or custom geometry like FREEFORM paths)
             has_visible_geometry = (
                 shape_element.fill_color is not None
+                or (hasattr(shape_element, 'fill_gradient') and shape_element.fill_gradient)
                 or shape_element.line_color is not None
                 or (hasattr(shape_element, 'blip_fill') and shape_element.blip_fill)
                 or (shape_element.metadata and shape_element.metadata.get('geometry'))

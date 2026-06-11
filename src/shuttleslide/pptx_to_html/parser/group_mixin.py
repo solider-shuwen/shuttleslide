@@ -64,6 +64,16 @@ class GroupMixin:
             group_width_px = emu_to_px(group_ext_cx)
             group_height_px = emu_to_px(group_ext_cy)
 
+            # Extract scene3d from group's grpSpPr
+            group_scene3d_camera = None
+            grpSpPr = elem.find('p:grpSpPr', ns)
+            if grpSpPr is not None:
+                camera = grpSpPr.find('a:scene3d/a:camera', ns)
+                if camera is not None:
+                    prst = camera.get('prst')
+                    if prst:
+                        group_scene3d_camera = prst
+
             # Parse children recursively
             children = []
             child_z = z_order
@@ -84,6 +94,11 @@ class GroupMixin:
                             scale_x, scale_y, co_x, co_y,
                             group_left_px, group_top_px
                         )
+                        # Propagate group's scene3d to children
+                        if group_scene3d_camera:
+                            if not hasattr(item, 'metadata') or item.metadata is None:
+                                item.metadata = {}
+                            item.metadata['scene3d_camera'] = group_scene3d_camera
                         children.append(item)
                         child_z += 1
                 else:
@@ -92,8 +107,17 @@ class GroupMixin:
                         scale_x, scale_y, co_x, co_y,
                         group_left_px, group_top_px
                     )
+                    # Propagate group's scene3d to children
+                    if group_scene3d_camera:
+                        if not hasattr(child_elem, 'metadata') or child_elem.metadata is None:
+                            child_elem.metadata = {}
+                        child_elem.metadata['scene3d_camera'] = group_scene3d_camera
                     children.append(child_elem)
                     child_z += 1
+
+            group_metadata = {"group_shape": True, "child_count": len(children)}
+            if group_scene3d_camera:
+                group_metadata['scene3d_camera'] = group_scene3d_camera
 
             return GroupElement(
                 element_type="group",
@@ -103,7 +127,7 @@ class GroupMixin:
                 height=group_height_px,
                 z_order=z_order,
                 children=children,
-                metadata={"group_shape": True, "child_count": len(children)}
+                metadata=group_metadata
             )
 
         except Exception:
@@ -154,10 +178,20 @@ class GroupMixin:
 
     def _propagate_group_scale(self, group: GroupElement, scale_x: float, scale_y: float):
         """Recursively scale all descendants of a group by the parent's scale factors."""
+        # Propagate scene3d from parent group to nested children
+        parent_scene3d = group.metadata.get('scene3d_camera') if group.metadata else None
         for sub in group.children:
             sub.left *= scale_x
             sub.top *= scale_y
             sub.width *= scale_x
             sub.height *= scale_y
+            # Propagate scene3d to nested children
+            if parent_scene3d:
+                if not hasattr(sub, 'metadata') or sub.metadata is None:
+                    sub.metadata = {}
+                if 'scene3d_camera' not in sub.metadata:
+                    sub.metadata['scene3d_camera'] = parent_scene3d
             if isinstance(sub, GroupElement):
                 self._propagate_group_scale(sub, scale_x, scale_y)
+
+

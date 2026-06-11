@@ -12,7 +12,7 @@ from shuttleslide.pptx_to_html.converters.tables import TableConverter
 from shuttleslide.pptx_to_html.converters.images import ImageConverter
 from shuttleslide.pptx_to_html.converters.shapes import ShapeConverter
 from shuttleslide.pptx_to_html.layouts.flow import FlowLayout
-from shuttleslide.pptx_to_html.layouts.absolute import AbsoluteLayout
+from shuttleslide.pptx_to_html.layouts.pptview import PPTLayout
 
 __all__ = [
     "PPTXParser",
@@ -28,5 +28,5 @@ __all__ = [
     "ImageConverter",
     "ShapeConverter",
     "FlowLayout",
-    "AbsoluteLayout",
+    "PPTLayout",
 ]

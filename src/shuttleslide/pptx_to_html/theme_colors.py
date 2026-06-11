@@ -101,6 +101,11 @@ class ThemeColorExtractor:
         }
 
         if isinstance(color_ref, int):
+            # NOT_THEME_COLOR (0) must not resolve to a real theme color.
+            # Without this guard, index 0 maps to 'dk1' via the fallback, producing
+            # a false color when python-pptx returns NOT_THEME_COLOR instead of None.
+            if int(color_ref) == 0:
+                return None
             # Try enum-to-XML-name mapping first
             xml_name = mso_to_xml.get(int(color_ref))
             if xml_name and xml_name in self.theme_colors:

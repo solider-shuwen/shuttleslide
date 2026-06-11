@@ -4,6 +4,8 @@ Text Converter - converts text elements to HTML.
 
 from html import escape
 import base64
+import os
+from typing import Optional
 from shuttleslide.pptx_to_html.models import TextElement
 
 
@@ -60,7 +62,7 @@ from shuttleslide.pptx_to_html.models import TextElement
 # ==============
 # Users can override this via --line-height-factor parameter:
 # slidecraft to-html input.pptx --line-height-factor 0.95
-LINE_HEIGHT_ADJUSTMENT = 0.92  # Updated by user to make lines tighter
+LINE_HEIGHT_ADJUSTMENT = 1  # Expand line spacing beyond PPT value
 
 # Paragraph spacing adjustment factors
 # ====================================
@@ -108,13 +110,23 @@ LINE_HEIGHT_ADJUSTMENT = 0.92  # Updated by user to make lines tighter
 PARAGRAPH_SPACING_RATIO = 0.538  # Multiply PPT spacing by this for CSS
 
 # Adjustment for zero spacing (special case)
-PARAGRAPH_SPACING_ADJUSTMENT = -0.35  # -0.35em for PPT's default tight spacing
+# PPT's 0pt spacing is the default — paragraphs have normal line-height gap between
+# them, not compressed. Negative margins were previously used to compress spacing,
+# but this caused overlap when adjacent paragraphs have very different font sizes
+# (e.g., 52pt title → 17pt subtitle). Use 0 to match PPT's actual 0pt behavior.
+PARAGRAPH_SPACING_ADJUSTMENT = 0  # 0pt: no extra compression for PPT's default 0pt spacing
 
 
 class TextConverter:
     """
     Converts text elements from PPTX to HTML.
     """
+
+    def __init__(self, use_base64: bool = False, output_dir: Optional[str] = None):
+        self.use_base64 = use_base64
+        self.output_dir = output_dir
+        self._bullet_counter = 0
+        self._created_dirs = set()
 
     def convert(self, element: TextElement) -> str:
         """
@@ -188,6 +200,14 @@ class TextConverter:
 
         for para in element.paragraphs:
             if not para.text.strip():
+                # Render empty paragraphs as spacers — they take up vertical space
+                # in PPT (especially when font_size is large), affecting bottom-anchored text position
+                spacer_font_size = para.font_size if para.font_size else None
+                spacer_style = "margin: 0; padding: 0; line-height: 1.0"
+                if spacer_font_size:
+                    spacer_style += f"; font-size: {spacer_font_size}pt"
+                html_parts.append(f'<p style="{spacer_style}">&nbsp;</p>')
+                para_index += 1
                 continue
 
             # Check if this should be a bullet point based on parsed bullet properties
@@ -336,15 +356,15 @@ class TextConverter:
             # This applies whether spacing_before is None or 0
             styles.append("margin-top: 0 !important")
         else:
-            # Non-first paragraph with 0pt spacing: Apply negative margin for tightness
-            styles.append(f"margin-top: {PARAGRAPH_SPACING_ADJUSTMENT}em !important")
+            # Non-first paragraph with 0pt spacing: no extra compression needed
+            styles.append(f"margin-top: {PARAGRAPH_SPACING_ADJUSTMENT}pt !important")
 
         if para.spacing_after is not None and para.spacing_after > 0:
             adjusted_spacing = para.spacing_after * PARAGRAPH_SPACING_RATIO
             styles.append(f"margin-bottom: {adjusted_spacing:.2f}pt !important")
         else:
-            # PPT's 0pt uses default tight spacing
-            styles.append(f"margin-bottom: {PARAGRAPH_SPACING_ADJUSTMENT}em !important")
+            # PPT's 0pt: normal paragraph spacing, no compression
+            styles.append(f"margin-bottom: {PARAGRAPH_SPACING_ADJUSTMENT}pt !important")
 
         return styles
 
@@ -486,12 +506,6 @@ class TextConverter:
                 styles.append("writing-mode: vertical-rl")
             elif element.vert == 'wordVert':
                 styles.append("writing-mode: vertical-lr")
-
-        if element.flip_h:
-            transform_parts.append("scaleX(-1)")
-
-        if element.flip_v:
-            transform_parts.append("scaleY(-1)")
 
         if element.rotation:
             transform_parts.append(f"rotate({element.rotation}deg)")
@@ -695,8 +709,7 @@ class TextConverter:
                 num -= val[i]
         return result
 
-    @staticmethod
-    def _build_bullet_span(para, bullet_marker: str, bullet_col_em: float = 1.5) -> str:
+    def _build_bullet_span(self, para, bullet_marker: str, bullet_col_em: float = 1.5) -> str:
         """
         Build the bullet <span> HTML with optional styling.
 
@@ -737,14 +750,17 @@ class TextConverter:
             img_styles.append("width: auto")
 
             image_type = para.bullet.blip_image_type or 'png'
-            mime_types = {
-                "png": "image/png", "jpeg": "image/jpeg", "jpg": "image/jpeg",
-                "gif": "image/gif", "bmp": "image/bmp", "tiff": "image/tiff",
-                "webp": "image/webp", "emf": "image/x-emf", "wmf": "image/x-wmf",
-            }
-            mime_type = mime_types.get(image_type.lower(), "image/png")
-            encoded = base64.b64encode(para.bullet.blip_image_bytes).decode("utf-8")
-            src = f"data:{mime_type};base64,{encoded}"
+            if self.use_base64:
+                mime_types = {
+                    "png": "image/png", "jpeg": "image/jpeg", "jpg": "image/jpeg",
+                    "gif": "image/gif", "bmp": "image/bmp", "tiff": "image/tiff",
+                    "webp": "image/webp", "emf": "image/x-emf", "wmf": "image/x-wmf",
+                }
+                mime_type = mime_types.get(image_type.lower(), "image/png")
+                encoded = base64.b64encode(para.bullet.blip_image_bytes).decode("utf-8")
+                src = f"data:{mime_type};base64,{encoded}"
+            else:
+                src = self._save_bullet_image(para.bullet.blip_image_bytes, image_type)
 
             img_style_str = "; ".join(img_styles)
             img_html = f'<img src="{src}" style="{img_style_str}" alt="bullet" />'
@@ -758,3 +774,24 @@ class TextConverter:
         escaped_marker = escape(bullet_marker)
         style_str = "; ".join(bullet_styles)
         return f'<span class="bullet" style="{style_str}">{escaped_marker}</span>'
+
+    def _save_bullet_image(self, image_bytes: bytes, image_type: str) -> str:
+        """Save a bullet image to file and return the relative path."""
+        ext = f".{image_type.lower()}"
+        filename = f"bullet-{self._bullet_counter}{ext}"
+        self._bullet_counter += 1
+
+        if self.output_dir is None:
+            assets_dir = os.path.join("output_assets", "images")
+        else:
+            assets_dir = os.path.join(self.output_dir, "images")
+
+        if assets_dir not in self._created_dirs:
+            os.makedirs(assets_dir, exist_ok=True)
+            self._created_dirs.add(assets_dir)
+
+        filepath = os.path.join(assets_dir, filename)
+        with open(filepath, 'wb') as f:
+            f.write(image_bytes)
+
+        return os.path.join("output_assets", "images", filename).replace(os.sep, '/')

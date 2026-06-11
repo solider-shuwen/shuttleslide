@@ -9,7 +9,7 @@ from shuttleslide.pptx_to_html.models import TextElement, TableElement
 from shuttleslide.pptx_to_html.converters.text import TextConverter
 from shuttleslide.pptx_to_html.converters.tables import TableConverter
 from shuttleslide.pptx_to_html.layouts.flow import FlowLayout
-from shuttleslide.pptx_to_html.layouts.absolute import AbsoluteLayout
+from shuttleslide.pptx_to_html.layouts.pptview import PPTLayout
 
 
 class TestTextConverter:
@@ -137,12 +137,12 @@ class TestFlowLayout:
         assert layout.shape_converter is not None
 
 
-class TestAbsoluteLayout:
-    """Tests for AbsoluteLayout."""
+class TestPPTLayout:
+    """Tests for PPTLayout."""
 
     def test_layout_initialization(self):
         """Test absolute layout initialization."""
-        layout = AbsoluteLayout()
+        layout = PPTLayout()
         assert layout.text_converter is not None
         assert layout.table_converter is not None
         assert layout.image_converter is not None
@@ -179,7 +179,7 @@ class TestEndToEnd:
         assert flow_html.count("<section") == len(slides)
 
         # Test absolute layout
-        abs_layout = AbsoluteLayout()
+        abs_layout = PPTLayout()
         abs_html = abs_layout.convert(slides)
 
         assert "<!DOCTYPE html>" in abs_html

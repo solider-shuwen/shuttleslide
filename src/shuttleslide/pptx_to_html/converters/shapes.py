@@ -13,16 +13,17 @@ class ShapeConverter:
     Converts shape elements from PPTX to SVG-based HTML.
     """
 
-    def __init__(self, use_svg: bool = True, use_base64: bool = False):
+    def __init__(self, use_svg: bool = True, use_base64: bool = False, output_dir: str = None):
         """
         Initialize the shape converter.
 
         Args:
             use_svg: If True, generate SVG. If False, use CSS classes.
             use_base64: If True, embed images as base64. If False, save as separate files (default).
+            output_dir: Directory for saving image assets relative to the output HTML.
         """
         self.use_svg = use_svg
-        self.svg_generator = SVGShapeGenerator(use_base64=use_base64)
+        self.svg_generator = SVGShapeGenerator(use_base64=use_base64, output_dir=output_dir)
 
     # Mapping of PPTX shape types to CSS classes (fallback when not using SVG)
     SHAPE_TYPE_MAP = {
@@ -322,8 +323,10 @@ class ShapeConverter:
                 f"z-index: {element.z_order}",
             ]
 
-        # Add fill color
-        if element.fill_color:
+        # Add fill color or gradient
+        if hasattr(element, 'fill_gradient') and element.fill_gradient:
+            styles.append(f"background: {element.fill_gradient}")
+        elif element.fill_color:
             styles.append(f"background-color: {element.fill_color}")
 
         # Add border (line color)
@@ -460,6 +463,15 @@ class ShapeConverter:
 
         if element.line_color:
             attrs.append(f'data-pptx-line-color="{element.line_color}"')
+
+        # Store arrowhead metadata for round-trip
+        if element.metadata:
+            for end_key, attr_name in [('head_end', 'head-arrow'), ('tail_end', 'tail-arrow')]:
+                end_data = element.metadata.get(end_key)
+                if end_data:
+                    attrs.append(
+                        f'data-pptx-{attr_name}="{end_data["type"]},{end_data.get("w", "med")},{end_data.get("len", "med")}"'
+                    )
 
         return attrs
 

@@ -206,3 +206,89 @@ class MasterStylesMixin:
             styles[level] = text_style
 
         return styles
+
+    def _get_layout_placeholder_defaults(self, layout, placeholder_type) -> dict:
+        """
+        Get default text styles from the matching placeholder in a slide layout.
+
+        Each layout shape (placeholder) can have its own <a:lstStyle> inside
+        <p:txBody> with level-specific defaults (font size, bold, etc.).
+        These apply when the slide's placeholder text has no explicit formatting.
+
+        Args:
+            layout: python-pptx slide layout object
+            placeholder_type: placeholder type string (e.g., 'ctrTitle', 'title', 'body')
+
+        Returns:
+            Dict mapping level (int) to MasterTextStyle, or empty dict
+        """
+        if layout is None:
+            return {}
+
+        # Use a cache key based on layout id + placeholder type
+        layout_id = id(layout)
+        cache_key = (layout_id, placeholder_type)
+        if hasattr(self, '_layout_placeholder_cache') and cache_key in self._layout_placeholder_cache:
+            return self._layout_placeholder_cache[cache_key]
+
+        defaults = {}
+        try:
+            ns = self._ns
+            layout_elem = layout._element
+
+            # Build a mapping from python-pptx placeholder type enum values to
+            # OpenXML ph type strings.  python-pptx exposes this as the
+            # ``placeholder_format.idx`` / ``placeholder_format.type`` attributes,
+            # but it's easier to walk the XML directly.
+            #
+            # OpenXML ph types we care about:
+            PH_TYPE_MAP = {
+                1: 'title',      # PP_PLACEHOLDER.TITLE
+                2: 'body',       # PP_PLACEHOLDER.BODY
+                3: 'ctrTitle',   # PP_PLACEHOLDER.CENTERED_TITLE
+                14: 'ctrTitle',  # PP_PLACEHOLDER.CENTERED_TITLE (some versions)
+            }
+            target_types = PH_TYPE_MAP.get(placeholder_type, None)
+            if target_types is None:
+                # Try string match directly
+                target_types = str(placeholder_type).lower() if isinstance(placeholder_type, str) else None
+            if target_types is None:
+                return {}
+
+            # Accept either a single string or a set
+            if isinstance(target_types, str):
+                target_types = {target_types}
+            # Normalize to lowercase for comparison
+            target_types = {t.lower() for t in target_types}
+
+            # Walk layout shapes to find matching placeholder
+            for sp in layout_elem.findall('.//p:sp', ns):
+                ph = sp.find('.//p:nvSpPr/p:nvPr/p:ph', ns)
+                if ph is None:
+                    continue
+                ph_type = ph.get('type', 'body').lower()
+
+                if ph_type not in target_types:
+                    continue
+
+                # Found matching placeholder — extract lstStyle
+                txBody = sp.find('p:txBody', ns)
+                if txBody is None:
+                    continue
+                lstStyle = txBody.find('a:lstStyle', ns)
+                if lstStyle is None:
+                    continue
+
+                # Parse level styles using the existing _parse_level_styles helper
+                # (it expects a parent element containing <a:lvl{i}pPr> children)
+                defaults = self._parse_level_styles(lstStyle, ns)
+                break
+
+        except Exception:
+            pass
+
+        # Cache the result
+        if not hasattr(self, '_layout_placeholder_cache'):
+            self._layout_placeholder_cache = {}
+        self._layout_placeholder_cache[cache_key] = defaults
+        return defaults

@@ -4,10 +4,11 @@ Image parsing mixin for PPTXParser.
 Handles image extraction, cropping (srcRect), and color replacement (clrChange).
 """
 
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from shuttleslide.pptx_to_html.models import ImageElement
-from shuttleslide.pptx_to_html.utils.units import px_to_emu, EMU_PER_INCH
+from shuttleslide.pptx_to_html.utils.units import px_to_emu, EMU_PER_INCH, angle_to_degrees
+from shuttleslide.pptx_to_html.utils.namespaces import NAMESPACES, NS_R_CLARK
 
 
 class ImageMixin:
@@ -18,10 +19,26 @@ class ImageMixin:
     ) -> Optional[ImageElement]:
         """Parse an image shape, including srcRect cropping and clrChange effects."""
         try:
-            # Get image bytes
-            image = shape.image
-            image_bytes = image.blob
-            image_type = image.ext
+            # Get image bytes — try python-pptx high-level API first,
+            # fall back to blipFill XML relationship extraction
+            try:
+                image = shape.image
+                image_bytes = image.blob
+                image_type = image.ext
+            except (ValueError, AttributeError):
+                # Fallback 1: standard blipFill r:embed
+                blip_data = self._extract_blip_fill(shape)
+                if blip_data is not None:
+                    image_bytes = blip_data['image_bytes']
+                    image_type = blip_data['image_type']
+                else:
+                    # Fallback 2: OLE/SVG — blip has no r:embed, but image may be
+                    # in asvg:svgBlip extension or via OLE object image relationship
+                    blip_data = self._extract_ole_image(shape)
+                    if blip_data is None:
+                        return None
+                    image_bytes = blip_data['image_bytes']
+                    image_type = blip_data['image_type']
 
             # Get alt text
             alt_text = "" if not hasattr(shape, "alt_text") else shape.alt_text
@@ -30,6 +47,7 @@ class ImageMixin:
             clr_change = None
             scene3d_camera = None
             fill_mode = "stretch"
+            rotation = None
 
             # Extract special properties from XML
             ns = self._ns
@@ -69,6 +87,13 @@ class ImageMixin:
                     if prst:
                         scene3d_camera = prst
 
+                # Extract rotation from <a:xfrm>
+                xfrm = elem.find('.//a:xfrm', ns)
+                if xfrm is not None:
+                    rot_val = xfrm.get('rot')
+                    if rot_val:
+                        rotation = angle_to_degrees(float(rot_val))
+
                 # Extract fill mode from <a:blipFill>
                 blipFill_elem = elem.find('p:blipFill', ns)
                 if blipFill_elem is not None:
@@ -88,7 +113,7 @@ class ImageMixin:
                 try:
                     from PIL import Image as PILImage
                     import io as _io
-                    pil_img = PILImage.open(_io.BytesIO(image.blob))
+                    pil_img = PILImage.open(_io.BytesIO(image_bytes))
                     img_w, img_h = pil_img.size
                     dpi = pil_img.info.get('dpi', (96, 96))
                     dpi_x = dpi[0] if dpi and dpi[0] > 0 else 96
@@ -117,20 +142,26 @@ class ImageMixin:
                 except Exception:
                     pass
 
-            # Apply srcRect cropping with Pillow
-            if src_rect:
-                image_bytes = self._crop_image_src_rect(image_bytes, src_rect)
-                # Update dimensions after cropping - the shape's width/height
-                # in PPTX already reflects the cropped area, so no change needed
+            # SVG images cannot be processed by Pillow — skip raster operations
+            # and preserve the original SVG bytes.
+            is_svg = image_type in ('svg', 'svg+xml')
 
-            # Apply clrChange with Pillow
-            if clr_change and clr_change.get('to') == 'transparent':
+            # Apply srcRect cropping
+            if src_rect:
+                if is_svg:
+                    image_bytes = self._crop_svg_src_rect(image_bytes, src_rect)
+                else:
+                    image_bytes = self._crop_image_src_rect(image_bytes, src_rect)
+
+            # Apply clrChange with Pillow (skip for SVG)
+            if clr_change and clr_change.get('to') == 'transparent' and not is_svg:
                 image_bytes = self._apply_color_change(
                     image_bytes, clr_change['from'], tolerance=30
                 )
 
             # Ensure image_type is PNG after Pillow processing (transparency requires PNG)
-            if clr_change or src_rect:
+            # But keep SVG as SVG — the browser handles it natively.
+            if (clr_change or src_rect) and not is_svg:
                 image_type = 'png'
 
             element = ImageElement(
@@ -148,6 +179,7 @@ class ImageMixin:
                 fill_mode=fill_mode,
                 scale_w=scale_w,
                 scale_h=scale_h,
+                rotation=rotation,
             )
 
             # Store scene3d in metadata for CSS rendering
@@ -192,6 +224,66 @@ class ImageMixin:
         except Exception:
             return image_bytes
 
+    def _crop_svg_src_rect(self, image_bytes: bytes, src_rect: dict) -> bytes:
+        """Crop SVG image by adjusting its viewBox to match OpenXML srcRect.
+
+        srcRect values are in 1/100000ths of the image dimension.
+        Instead of cropping pixels (impossible for vector SVG), we shift and
+        shrink the viewBox so only the desired region is visible.
+        """
+        try:
+            import re
+
+            svg_str = image_bytes.decode('utf-8', errors='replace')
+
+            # Parse existing viewBox or infer from width/height
+            vb_match = re.search(r'viewBox=["\']([^"\']*)["\']', svg_str)
+            if vb_match:
+                parts = vb_match.group(1).split()
+                vb_x, vb_y, vb_w, vb_h = float(parts[0]), float(parts[1]), float(parts[2]), float(parts[3])
+            else:
+                # Infer from width/height attributes
+                w_match = re.search(r'<svg[^>]*\swidth=["\']([^"\']*)["\']', svg_str)
+                h_match = re.search(r'<svg[^>]*\sheight=["\']([^"\']*)["\']', svg_str)
+                if not w_match or not h_match:
+                    return image_bytes
+                vb_x, vb_y = 0.0, 0.0
+                vb_w = float(w_match.group(1))
+                vb_h = float(h_match.group(1))
+
+            # Calculate crop percentages (srcRect values are in 1/100000ths)
+            l_pct = src_rect.get('l', 0) / 100000
+            t_pct = src_rect.get('t', 0) / 100000
+            r_pct = src_rect.get('r', 0) / 100000
+            b_pct = src_rect.get('b', 0) / 100000
+
+            # New viewBox: shift origin and shrink to cropped region
+            new_x = vb_x + vb_w * l_pct
+            new_y = vb_y + vb_h * t_pct
+            new_w = vb_w * (1 - l_pct - r_pct)
+            new_h = vb_h * (1 - t_pct - b_pct)
+
+            if new_w <= 0 or new_h <= 0:
+                return image_bytes
+
+            new_viewbox = f"{new_x:.4f} {new_y:.4f} {new_w:.4f} {new_h:.4f}"
+
+            # Replace viewBox
+            if vb_match:
+                svg_str = svg_str[:vb_match.start(1)] + new_viewbox + svg_str[vb_match.end(1):]
+            else:
+                # Add viewBox to <svg> tag
+                svg_str = svg_str.replace('<svg', f'<svg viewBox="{new_viewbox}"', 1)
+
+            # Remove fixed width/height so SVG scales to container
+            svg_str = re.sub(r'\swidth=["\'][^"\']*["\']', '', svg_str, count=1)
+            svg_str = re.sub(r'\sheight=["\'][^"\']*["\']', '', svg_str, count=1)
+            svg_str = svg_str.replace('<svg', '<svg width="100%" height="100%"', 1)
+
+            return svg_str.encode('utf-8')
+        except Exception:
+            return image_bytes
+
     def _apply_color_change(self, image_bytes: bytes, from_color: str,
                             tolerance: int = 30) -> bytes:
         """Apply color replacement to image: make near-'from_color' pixels transparent."""
@@ -221,3 +313,62 @@ class ImageMixin:
             return output.getvalue()
         except Exception:
             return image_bytes
+
+    def _extract_ole_image(self, shape) -> Optional[Dict[str, Any]]:
+        """Extract image from OLE-embedded picture shapes.
+
+        Some PPTX shapes store their image as an OLE object. The <a:blip>
+        has no r:embed attribute, but the image is available via:
+        1. asvg:svgBlip r:embed in blip extension list (SVG version)
+        2. An image relationship from the OLE object (EMF version)
+
+        Returns:
+            Dictionary with {image_bytes, image_type} or None
+        """
+        if not hasattr(shape, '_element'):
+            return None
+
+        try:
+            ns = {'a': NAMESPACES['a'], 'r': NAMESPACES['r'],
+                  'asvg': 'http://schemas.microsoft.com/office/drawing/2016/SVG/main',
+                  'p': NAMESPACES['p']}
+            elem = shape._element
+
+            # Try 1: look for asvg:svgBlip r:embed in blip extension list
+            svg_blip = elem.find('.//a:blip/a:extLst/a:ext/asvg:svgBlip', ns)
+            if svg_blip is not None:
+                embed_id = svg_blip.get(f'{NS_R_CLARK}embed')
+                if embed_id:
+                    try:
+                        rel = shape.part.rels[embed_id]
+                        target = rel.target_part
+                        return {
+                            'image_bytes': target.blob,
+                            'image_type': 'svg+xml',
+                        }
+                    except (KeyError, AttributeError):
+                        pass
+
+            # Try 2: look for any image relationship (EMF fallback)
+            image_rel_type = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image'
+            for rel_id, rel in shape.part.rels.items():
+                if rel.reltype == image_rel_type:
+                    try:
+                        target = rel.target_part
+                        content_type = target.content_type
+                        image_type = content_type.split('/')[-1] if '/' in content_type else 'png'
+                        if image_type == 'x-emf':
+                            image_type = 'emf'
+                        elif image_type == 'x-wmf':
+                            image_type = 'wmf'
+                        return {
+                            'image_bytes': target.blob,
+                            'image_type': image_type,
+                        }
+                    except (KeyError, AttributeError):
+                        continue
+
+        except Exception:
+            pass
+
+        return None

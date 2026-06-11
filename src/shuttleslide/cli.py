@@ -10,7 +10,7 @@ import click
 
 from shuttleslide.pptx_to_html.parser import PPTXParser
 from shuttleslide.pptx_to_html.layouts.flow import FlowLayout
-from shuttleslide.pptx_to_html.layouts.absolute import AbsoluteLayout
+from shuttleslide.pptx_to_html.layouts.pptview import PPTLayout
 from shuttleslide.pptx_to_html.layouts.slideshow import SlideshowLayout
 
 
@@ -31,9 +31,9 @@ def main():
 @click.option("-o", "--output", type=click.Path(), help="Output HTML file path")
 @click.option(
     "--layout",
-    type=click.Choice(["flow", "absolute", "slideshow"], case_sensitive=False),
+    type=click.Choice(["flow", "pptview", "slideshow"], case_sensitive=False),
     default="slideshow",
-    help="Layout mode: 'flow' for natural flow, 'absolute' for exact positioning, 'slideshow' for interactive presentation (default)",
+    help="Layout mode: 'flow' for scrollable page, 'pptview' for PPT-style editor, 'slideshow' for interactive presentation (default)",
 )
 @click.option("--stdout", is_flag=True, help="Output to stdout instead of file")
 @click.option(
@@ -107,12 +107,20 @@ def to_html(
         enable_animations = animations and not no_animations
         use_base64 = base64  # Default is False (external files), True only when --base64 is specified
 
+        # Compute assets output directory (next to the HTML file)
+        if not stdout and not use_base64:
+            import os
+            html_dir = str(output_path.parent.resolve())
+            assets_dir = os.path.join(html_dir, "output_assets")
+        else:
+            assets_dir = None
+
         if layout == "flow":
-            layout_engine = FlowLayout()
-        elif layout == "absolute":
-            layout_engine = AbsoluteLayout(use_base64=use_base64)
+            layout_engine = FlowLayout(output_dir=assets_dir)
+        elif layout == "pptview":
+            layout_engine = PPTLayout(use_base64=use_base64, output_dir=assets_dir)
         else:  # slideshow
-            layout_engine = SlideshowLayout(enable_animations=enable_animations, use_base64=use_base64)
+            layout_engine = SlideshowLayout(enable_animations=enable_animations, use_base64=use_base64, output_dir=assets_dir)
 
         # Convert to HTML
         if verbose:

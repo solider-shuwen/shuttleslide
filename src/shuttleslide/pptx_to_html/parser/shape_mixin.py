@@ -46,6 +46,8 @@ class ShapeMixin:
 
         # Extract fill and line colors
         fill_color = None
+        fill_gradient = None
+        fill_gradient_data = None
         line_color = None
 
         # Detect explicit noFill (e.g., FREEFORM shapes with stroke-only outlines)
@@ -57,24 +59,40 @@ class ShapeMixin:
             except (AttributeError, TypeError):
                 pass
 
+        # Check for gradient fill in shape's spPr (before solid fill extraction)
+        if fill_color is None and hasattr(shape, '_element'):
+            try:
+                _ns = {'a': NAMESPACES['a'], 'p': NAMESPACES['p']}
+                _spPr = shape._element.find('./p:spPr', _ns)
+                if _spPr is not None:
+                    _grad_fill = _spPr.find('./a:gradFill', _ns)
+                    if _grad_fill is not None:
+                        result = self._parse_shape_gradient_fill(_grad_fill)
+                        if result:
+                            fill_gradient, fill_gradient_data = result
+            except Exception:
+                pass
+
         # Extract fill color (handle different fill types, theme colors, and RGBColor objects)
-        if fill_color is None and hasattr(shape, "fill") and shape.fill:
+        if fill_color is None and fill_gradient is None and hasattr(shape, "fill") and shape.fill:
             try:
                 # Check if fill has fore_color attribute
                 if hasattr(shape.fill, "fore_color"):
                     fore_color = shape.fill.fore_color
 
-                    # Try to get theme color first (if it's a theme color reference)
-                    if hasattr(fore_color, "theme_color") and fore_color.theme_color is not None:
+                    # Determine color type to pick the right extraction path.
+                    # MSO_COLOR_TYPE: RGB(1), SCHEME(2)
+                    # Do NOT rely on theme_color is not None — NOT_THEME_COLOR (0) is not None.
+                    color_type = getattr(fore_color, 'type', None)
+
+                    if color_type == 2:  # SCHEME — theme color reference
                         theme_color = fore_color.theme_color
-                        # Try to get theme color value
                         if self.theme_color_extractor:
-                            # Convert theme color enum to RGB
                             theme_rgb = self.theme_color_extractor.get_theme_color(theme_color)
                             if theme_rgb:
                                 fill_color = theme_rgb
 
-                    # If no theme color, try direct RGB
+                    # RGB or other concrete color
                     if not fill_color and hasattr(fore_color, "rgb") and fore_color.rgb:
                         rgb_obj = fore_color.rgb
                         # Handle RGBColor objects (pptx.dml.color.RGBColor)
@@ -93,6 +111,24 @@ class ShapeMixin:
                             fill_color = f"#{rgb_obj:06x}"
             except (AttributeError, TypeError, ValueError) as e:
                 fill_color = None
+
+        # If no direct fill color, try to extract from style/fillRef (theme style reference)
+        # Note: fillRef idx="0" means "no fill" (used by non-closed shapes like braces)
+        if fill_color is None and fill_gradient is None and hasattr(shape, '_element'):
+            try:
+                ns = {'a': NAMESPACES['a'], 'p': NAMESPACES['p']}
+                style = shape._element.find('.//p:style', ns)
+                if style is not None:
+                    fill_ref = style.find('.//a:fillRef', ns)
+                    if fill_ref is not None:
+                        fill_idx = fill_ref.get('idx', '0')
+                        if fill_idx != '0':
+                            scheme_clr = fill_ref.find('.//a:schemeClr', ns)
+                            if scheme_clr is not None:
+                                val = scheme_clr.get('val')
+                                fill_color = self._scheme_clr_to_color(val)
+            except Exception:
+                pass
 
         # Check for noFill in XML BEFORE accessing python-pptx line properties
         # Accessing shape.line.color triggers python-pptx to resolve style references,
@@ -118,17 +154,19 @@ class ShapeMixin:
                 if hasattr(shape.line, "color") and shape.line.color:
                     line_color_obj = shape.line.color
 
-                    # Try to get theme color first (if it's a theme color reference)
-                    if hasattr(line_color_obj, "theme_color") and line_color_obj.theme_color is not None:
+                    # Determine color type to pick the right extraction path.
+                    # MSO_COLOR_TYPE: RGB(1), SCHEME(2)
+                    # Do NOT rely on theme_color is not None — NOT_THEME_COLOR (0) is not None.
+                    color_type = getattr(line_color_obj, 'type', None)
+
+                    if color_type == 2:  # SCHEME — theme color reference
                         theme_color = line_color_obj.theme_color
-                        # Try to get theme color value
                         if self.theme_color_extractor:
-                            # Convert theme color enum to RGB
                             theme_rgb = self.theme_color_extractor.get_theme_color(theme_color)
                             if theme_rgb:
                                 line_color = theme_rgb
 
-                    # If no theme color, try direct RGB
+                    # RGB or other concrete color
                     if not line_color and hasattr(line_color_obj, "rgb") and line_color_obj.rgb:
                         rgb_obj = line_color_obj.rgb
                         # Handle RGBColor objects
@@ -151,34 +189,14 @@ class ShapeMixin:
         if not _line_has_noFill and not line_color and hasattr(shape, '_element'):
             try:
                 ns = {'a': NAMESPACES['a'], 'p': NAMESPACES['p']}
-
-                # Find style element first, then lnRef child
                 style = shape._element.find('.//p:style', ns)
                 if style is not None:
-                    # Find style element first, then lnRef child
-                    style = shape._element.find('.//p:style', ns)
-                    if style is not None:
-                        ln_ref = style.find('.//a:lnRef', ns)
-                        if ln_ref is not None:
-                            # Check for schemeClr (theme color reference)
-                            scheme_clr = ln_ref.find('.//a:schemeClr', ns)
-                            if scheme_clr is not None:
-                                val = scheme_clr.get('val')  # e.g., "accent1", "accent2", etc.
-                                if val and self.theme_color_extractor:
-                                    # Convert scheme color name to theme color enum
-                                    # val is like "accent3", we need to convert to MSO_THEME_COLOR.ACCENT_3
-                                    # The scheme color name uses lowercase without underscore, but the enum uses uppercase WITH underscore
-                                    theme_color_name = val.upper()
-                                    # Add underscore between letter and number (e.g., "ACCENT3" -> "ACCENT_3")
-                                    theme_color_name = re.sub(r'([A-Z]+)(\d+)', r'\1_\2', theme_color_name)
-                                    try:
-                                        from pptx.enum.dml import MSO_THEME_COLOR
-                                        theme_color_enum = getattr(MSO_THEME_COLOR, theme_color_name)
-                                        theme_rgb = self.theme_color_extractor.get_theme_color(theme_color_enum)
-                                        if theme_rgb:
-                                            line_color = theme_rgb
-                                    except (AttributeError, ValueError):
-                                        pass
+                    ln_ref = style.find('.//a:lnRef', ns)
+                    if ln_ref is not None:
+                        scheme_clr = ln_ref.find('.//a:schemeClr', ns)
+                        if scheme_clr is not None:
+                            val = scheme_clr.get('val')
+                            line_color = self._scheme_clr_to_color(val)
             except Exception:
                 pass
 
@@ -211,6 +229,12 @@ class ShapeMixin:
         if preset_name:
             metadata["preset_name"] = preset_name
 
+        # Extract fill alpha (transparency)
+        if fill_color and fill_color != "none":
+            alpha = self._extract_shape_fill_alpha(shape)
+            if alpha is not None and alpha < 1.0:
+                metadata["fill_opacity"] = alpha
+
         # Extract flipH/flipV, rotation, scene3d, and line width from XML
         flip_h = False
         flip_v = False
@@ -233,12 +257,24 @@ class ShapeMixin:
                     if prst:
                         metadata['scene3d_camera'] = prst
 
-                # Extract explicit line width (<a:ln w="...">)
+                # Extract explicit line width (<a:ln w="...">) and arrowhead endpoints
                 ln_elem = shape._element.find('.//a:ln', ns_xml)
                 if ln_elem is not None:
                     w_attr = ln_elem.get('w')
                     if w_attr:
                         metadata['line_width'] = emu_to_px(int(w_attr))
+
+                    # Extract arrowhead endpoints (<a:headEnd> and <a:tailEnd>)
+                    for end_tag, meta_key in [('a:headEnd', 'head_end'), ('a:tailEnd', 'tail_end')]:
+                        end_elem = ln_elem.find(end_tag, ns_xml)
+                        if end_elem is not None:
+                            end_type = end_elem.get('type')
+                            if end_type and end_type != 'none':
+                                metadata[meta_key] = {
+                                    'type': end_type,
+                                    'w': end_elem.get('w', 'med'),
+                                    'len': end_elem.get('len', 'med'),
+                                }
             except Exception:
                 pass
 
@@ -251,6 +287,8 @@ class ShapeMixin:
             z_order=z_order,
             shape_type=shape_type,
             fill_color=fill_color,
+            fill_gradient=fill_gradient,
+            fill_gradient_data=fill_gradient_data,
             line_color=line_color,
             dash_style=dash_style,
             text=text,
@@ -475,3 +513,79 @@ class ShapeMixin:
         except Exception:
             pass
         return None
+
+    def _parse_shape_gradient_fill(self, grad_fill_elem) -> Optional[tuple]:
+        """
+        Parse <a:gradFill> from a shape's spPr and produce CSS gradient + structured data.
+
+        Args:
+            grad_fill_elem: <a:gradFill> XML element
+
+        Returns:
+            Tuple of (css_gradient_string, structured_data_dict) or None
+        """
+        ns = self._ns
+
+        # Parse gradient stops
+        gs_lst = grad_fill_elem.find('a:gsLst', ns)
+        if gs_lst is None:
+            return None
+
+        stops = []
+        structured_stops = []
+        for gs in gs_lst.findall('a:gs', ns):
+            pos = gs.get('pos', '0')
+            pos_pct = int(pos) / 1000  # XML uses 0-100000, CSS uses 0-100
+
+            color = self._resolve_xml_color(gs)
+            if not color:
+                continue
+
+            # Extract alpha from color child element
+            # <a:gs><a:srgbClr val="..."><a:alpha val="..."/></a:gs>
+            opacity = 1.0
+            for color_tag in ('a:srgbClr', 'a:schemeClr'):
+                color_elem = gs.find(color_tag, ns)
+                if color_elem is not None:
+                    alpha_elem = color_elem.find('a:alpha', ns)
+                    if alpha_elem is not None:
+                        alpha_val = alpha_elem.get('val')
+                        if alpha_val:
+                            opacity = int(alpha_val) / 100000.0
+                    break
+
+            # Build CSS stop string
+            if opacity < 1.0:
+                r = int(color[1:3], 16)
+                g = int(color[3:5], 16)
+                b = int(color[5:7], 16)
+                stops.append(f"rgba({r},{g},{b},{opacity:.4f}) {pos_pct}%")
+            else:
+                stops.append(f"{color} {pos_pct}%")
+
+            structured_stops.append({
+                'color': color,
+                'opacity': opacity,
+                'position': pos_pct,
+            })
+
+        if not stops:
+            return None
+
+        # Parse angle from <a:lin> element
+        css_angle = 180  # default: bottom-to-top
+        lin = grad_fill_elem.find('a:lin', ns)
+        if lin is not None:
+            ang = lin.get('ang')
+            if ang:
+                xml_angle = angle_to_degrees(int(ang))
+                css_angle = (90 - xml_angle) % 360
+
+        gradient_css = f"linear-gradient({css_angle:.1f}deg, {', '.join(stops)})"
+        gradient_data = {
+            'type': 'linear',
+            'angle': css_angle,
+            'stops': structured_stops,
+        }
+
+        return (gradient_css, gradient_data)

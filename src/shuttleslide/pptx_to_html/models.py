@@ -147,6 +147,7 @@ class ImageElement(SlideElement):
     clr_change: Optional[Dict[str, str]] = None
     # Image fill mode from <a:blipFill>: "stretch" (default), "tile", or "none"
     fill_mode: str = "stretch"
+    rotation: Optional[float] = None  # Rotation angle in degrees
     # PPT image scale (shape_EMU / cropped_img_EMU) — only meaningful with scene3d
     scale_w: Optional[float] = None
     scale_h: Optional[float] = None
@@ -157,6 +158,8 @@ class ShapeElement(SlideElement):
     """Shape element from a slide."""
     shape_type: str = ""
     fill_color: Optional[str] = None
+    fill_gradient: Optional[str] = None       # CSS linear-gradient(...) string
+    fill_gradient_data: Optional[Dict[str, Any]] = None  # Structured data for SVG: {angle, stops: [{color, opacity, position}]}
     line_color: Optional[str] = None
     dash_style: Optional[str] = None  # PPTX preset dash: solid, dash, dashDot, lgDash, lgDashDot, etc.
     text: Optional[str] = None

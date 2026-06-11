@@ -21,6 +21,20 @@ class SVGShapeGenerator:
     Supports both preset and custom geometries with complex styling.
     """
 
+    # Arrowhead SVG path definitions: type -> (path_d, refX, refY)
+    _ARROWHEAD_PATHS = {
+        'triangle': ('M 0 0 L 10 5 L 0 10 Z', 10, 5),
+        'arrow':    ('M 0 0 L 10 5 L 0 10', 10, 5),
+        'stealth':  ('M 0 5 L 10 0 L 8 5 L 10 10 Z', 10, 5),
+        'diamond':  ('M 5 0 L 10 5 L 5 10 L 0 5 Z', 10, 5),
+        'oval':     ('M 5 0 A 5 5 0 1 1 5 10 A 5 5 0 1 1 5 0 Z', 10, 5),
+        'open':     ('M 0 0 L 10 5 L 0 10', 10, 5),
+    }
+
+    # Size multipliers for arrowhead width/length relative to line width
+    _WIDTH_MULT = {'sm': 1.5, 'med': 2.5, 'lg': 3.5}
+    _LENGTH_MULT = {'sm': 2.0, 'med': 3.0, 'lg': 4.0}
+
     def __init__(self, use_base64: bool = False, output_dir: Optional[str] = None):
         """
         Initialize the SVG shape generator.
@@ -341,10 +355,12 @@ class SVGShapeGenerator:
 
         # Check for blipFill (image fill)
         blip_content = self._generate_blip_fill_content(element, path_d.strip())
+        marker_defs = self._generate_arrowhead_marker_defs(element)
+        gradient_defs = self._generate_linear_gradient_defs(element)
         if blip_content:
-            return f'<svg {svg_attr_str}>{blip_content}</svg>'
+            return f'<svg {svg_attr_str}>{gradient_defs}{marker_defs}{blip_content}</svg>'
 
-        return f'<svg {svg_attr_str}><path {path_attr_str}/></svg>'
+        return f'<svg {svg_attr_str}>{gradient_defs}{marker_defs}<path {path_attr_str}/></svg>'
 
     def _generate_preset_svg(self, element: ShapeElement, geometry: Dict) -> str:
         """
@@ -393,6 +409,10 @@ class SVGShapeGenerator:
         if paths_data:
             svg_attr_str = " ".join(svg_attrs)
 
+            # Generate arrowhead marker defs (if any)
+            marker_defs = self._generate_arrowhead_marker_defs(element)
+            gradient_defs = self._generate_linear_gradient_defs(element)
+
             # Check for blipFill (image fill)
             # Use combined path for clip path
             blip_content = self._generate_blip_fill_content(element, paths_data.get('all', ''))
@@ -409,12 +429,13 @@ class SVGShapeGenerator:
                     stroke_attr_str = " ".join(stroke_attrs)
                     svg_content += f'<path {stroke_attr_str}/>'
 
-                return f'<svg {svg_attr_str}>{svg_content}</svg>'
+                return f'<svg {svg_attr_str}>{gradient_defs}{marker_defs}{svg_content}</svg>'
 
             # Build separate path elements for filled and stroke-only paths
             path_elements = []
             has_stroke_only = bool(paths_data.get('stroke_only'))
-            has_fill = element.fill_color and element.fill_color != "none"
+            has_fill = (element.fill_color and element.fill_color != "none") or (
+                hasattr(element, 'fill_gradient') and element.fill_gradient)
 
             # Add filled path(s) — only render when the shape has a fill color.
             # When a separate stroke_only path exists (e.g., braces), the filled
@@ -427,7 +448,7 @@ class SVGShapeGenerator:
                     path_attrs.append('stroke="none"')
                 path_attrs.append(f'd="{paths_data["filled"]}"')
                 path_attr_str = " ".join(path_attrs)
-                path_elements.append(f'<path {path_attr_str}/>')
+                path_elements.append(f'<path {path_attr_str}/>'  )
 
             # Add stroke-only path(s) — the visible outline
             # For shapes like braces, this is the actual open stroke path
@@ -439,7 +460,7 @@ class SVGShapeGenerator:
                 path_elements.append(f'<path {stroke_attr_str}/>')
 
             if path_elements:
-                return f'<svg {svg_attr_str}>{"".join(path_elements)}</svg>'
+                return f'<svg {svg_attr_str}>{gradient_defs}{marker_defs}{"".join(path_elements)}</svg>'
 
         # Fallback to simple SVG
         return self._generate_simple_svg(element)
@@ -489,7 +510,12 @@ class SVGShapeGenerator:
             svg_attr_str = " ".join(svg_attrs)
             path_elements = []
             has_stroke_only = bool(paths_data.get('stroke_only'))
-            has_fill = element.fill_color and element.fill_color != "none"
+            has_fill = (element.fill_color and element.fill_color != "none") or (
+                hasattr(element, 'fill_gradient') and element.fill_gradient)
+
+            # Generate arrowhead marker defs (if any)
+            marker_defs = self._generate_arrowhead_marker_defs(element)
+            gradient_defs = self._generate_linear_gradient_defs(element)
 
             # Add filled path(s) — skip when no fill and stroke_only exists
             if paths_data.get('filled') and (has_fill or not has_stroke_only):
@@ -523,10 +549,10 @@ class SVGShapeGenerator:
                     stroke_attr_str = " ".join(stroke_attrs)
                     svg_content += f'<path {stroke_attr_str}/>'
 
-                return f'<svg {svg_attr_str}>{svg_content}</svg>'
+                return f'<svg {svg_attr_str}>{gradient_defs}{marker_defs}{svg_content}</svg>'
 
             if path_elements:
-                return f'<svg {svg_attr_str}>{"".join(path_elements)}</svg>'
+                return f'<svg {svg_attr_str}>{gradient_defs}{marker_defs}{"".join(path_elements)}</svg>'
 
         # Fallback: try the old single-path method for backward compatibility
         path_d = self._get_preset_path_d(shape_type, width, height)
@@ -537,10 +563,12 @@ class SVGShapeGenerator:
 
             # Check for blipFill (image fill)
             blip_content = self._generate_blip_fill_content(element, path_d)
+            marker_defs = self._generate_arrowhead_marker_defs(element)
+            gradient_defs = self._generate_linear_gradient_defs(element)
             if blip_content:
-                return f'<svg {svg_attr_str}>{blip_content}</svg>'
+                return f'<svg {svg_attr_str}>{gradient_defs}{marker_defs}{blip_content}</svg>'
 
-            return f'<svg {svg_attr_str}><path {path_attr_str}/></svg>'
+            return f'<svg {svg_attr_str}>{gradient_defs}{marker_defs}<path {path_attr_str}/></svg>'
 
         # Fallback to basic shapes by type name
         shape_type_upper = shape_type.upper()
@@ -565,7 +593,8 @@ class SVGShapeGenerator:
             return f'<svg {" ".join(svg_attrs)}><polygon points="{points}" {" ".join(path_attrs)}/></svg>'
 
         elif 'LINE' in shape_type_upper:
-            return f'<svg {" ".join(svg_attrs)}><line x1="0" y1="{height/2}" x2="{width}" y2="{height/2}" {" ".join(path_attrs)}/></svg>'
+            marker_defs = self._generate_arrowhead_marker_defs(element)
+            return f'<svg {" ".join(svg_attrs)}>{marker_defs}<line x1="0" y1="{height/2}" x2="{width}" y2="{height/2}" {" ".join(path_attrs)}/></svg>'
 
         else:
             # Generic rectangle as fallback
@@ -773,10 +802,90 @@ class SVGShapeGenerator:
         with open(filepath, 'wb') as f:
             f.write(image_bytes)
 
-        # Return relative path for HTML (use forward slashes for web compatibility)
-        return f"{assets_dir.replace(os.sep, '/')}/{filename}"
+        # Return relative path: "output_assets/images/filename"
+        rel_path = os.path.join("output_assets", "images", filename)
+        return rel_path.replace(os.sep, '/')
 
     # ── SVG attribute builders ───────────────────────────────────────
+
+    def _get_marker_id(self, element: ShapeElement, end_key: str) -> str:
+        """Generate a deterministic marker ID based on element identity."""
+        return f"arrow-{id(element)}-{end_key}"
+
+    def _generate_arrowhead_marker_defs(self, element: ShapeElement) -> str:
+        """
+        Generate SVG <defs><marker> elements for arrowhead endpoints.
+
+        Returns:
+            SVG defs string (empty string if no arrowheads)
+        """
+        if not hasattr(element, 'metadata') or not element.metadata:
+            return ""
+
+        markers = []
+
+        # Get line width for sizing
+        line_width = element.metadata.get('line_width', 2.0)
+        if line_width < 1:
+            line_width = 1.0
+        stroke_color = element.line_color or '#666666'
+
+        for end_key in ('head_end', 'tail_end'):
+            end_data = element.metadata.get(end_key)
+            if not end_data:
+                continue
+
+            arrow_type = end_data.get('type', 'triangle')
+            path_info = self._ARROWHEAD_PATHS.get(arrow_type)
+            if not path_info:
+                continue
+
+            path_d, ref_x, ref_y = path_info
+            w_size = end_data.get('w', 'med')
+            l_size = end_data.get('len', 'med')
+
+            marker_w = line_width * self._WIDTH_MULT.get(w_size, 2.5)
+            marker_h = line_width * self._LENGTH_MULT.get(l_size, 3.0)
+
+            marker_id = self._get_marker_id(element, end_key)
+
+            # Filled arrowheads use stroke color; open types have no fill
+            is_filled = arrow_type in ('triangle', 'stealth', 'diamond', 'oval')
+            fill_attr = f'fill="{stroke_color}"' if is_filled else 'fill="none"'
+
+            markers.append(
+                f'<marker id="{marker_id}" '
+                f'viewBox="0 0 10 10" '
+                f'refX="{ref_x}" refY="{ref_y}" '
+                f'markerWidth="{marker_w:.1f}" markerHeight="{marker_h:.1f}" '
+                f'orient="auto-start-reverse" '
+                f'markerUnits="userSpaceOnUse">'
+                f'<path d="{path_d}" {fill_attr} stroke="{stroke_color}" '
+                f'stroke-width="0.5"/>'
+                f'</marker>'
+            )
+
+        if not markers:
+            return ""
+
+        return f'<defs>{"".join(markers)}</defs>'
+
+    def _get_arrowhead_marker_attrs(self, element: ShapeElement) -> List[str]:
+        """Build marker-start/marker-end attributes for arrowheads."""
+        attrs = []
+        if not hasattr(element, 'metadata') or not element.metadata:
+            return attrs
+
+        for end_key, marker_attr in [('head_end', 'marker-start'), ('tail_end', 'marker-end')]:
+            end_data = element.metadata.get(end_key)
+            if not end_data:
+                continue
+            arrow_type = end_data.get('type', 'triangle')
+            if arrow_type and arrow_type != 'none' and self._ARROWHEAD_PATHS.get(arrow_type):
+                marker_id = self._get_marker_id(element, end_key)
+                attrs.append(f'{marker_attr}="url(#{marker_id})"')
+
+        return attrs
 
     def _build_svg_attributes(self, element: ShapeElement, width: float, height: float) -> List[str]:
         """Build SVG container attributes."""
@@ -811,7 +920,12 @@ class SVGShapeGenerator:
         # Fill color - use original color if available
         # If shape has blipFill, the fill will be handled separately
         has_blip = hasattr(element, 'blip_fill') and element.blip_fill
-        if element.fill_color:
+        has_gradient = hasattr(element, 'fill_gradient') and element.fill_gradient
+
+        if has_gradient:
+            grad_id = f"grad-{id(element)}"
+            attrs.append(f'fill="url(#{grad_id})"')
+        elif element.fill_color:
             if element.fill_color == "none":
                 # Explicit noFill from PPT (<a:noFill/>) — transparent, no default
                 attrs.append('fill="none"')
@@ -867,6 +981,9 @@ class SVGShapeGenerator:
             if 'stroke_opacity' in element.metadata:
                 attrs.append(f'stroke-opacity="{element.metadata["stroke_opacity"]}"')
 
+        # Arrowhead markers
+        attrs.extend(self._get_arrowhead_marker_attrs(element))
+
         return attrs
 
     def _build_stroke_attributes(self, element: ShapeElement) -> List[str]:
@@ -897,7 +1014,49 @@ class SVGShapeGenerator:
         else:
             attrs.append('stroke-width="2"')
 
+        # Arrowhead markers
+        attrs.extend(self._get_arrowhead_marker_attrs(element))
+
         return attrs
+
+    def _generate_linear_gradient_defs(self, element: ShapeElement) -> str:
+        """Generate SVG <defs><linearGradient> for shape gradient fill."""
+        if not hasattr(element, 'fill_gradient_data') or not element.fill_gradient_data:
+            return ""
+
+        data = element.fill_gradient_data
+        grad_id = f"grad-{id(element)}"
+
+        # Convert CSS angle to SVG gradientTransform rotation
+        # CSS 0deg = bottom-to-top, 90deg = left-to-right
+        # SVG linearGradient default: left-to-right (x1=0,y1=0,x2=1,y2=0)
+        # We use gradientTransform rotate to match CSS angle
+        css_angle = data.get('angle', 180)
+        svg_rotate = (css_angle - 90) % 360
+
+        # Build stop elements
+        stops_svg = []
+        for stop in data.get('stops', []):
+            color = stop['color']
+            opacity = stop.get('opacity', 1.0)
+            position = stop.get('position', 0.0)
+
+            if opacity < 1.0:
+                stops_svg.append(
+                    f'<stop offset="{position:.1f}%" stop-color="{color}" stop-opacity="{opacity:.4f}"/>'
+                )
+            else:
+                stops_svg.append(
+                    f'<stop offset="{position:.1f}%" stop-color="{color}"/>'
+                )
+
+        stops_str = "".join(stops_svg)
+        return (
+            f'<defs><linearGradient id="{grad_id}" '
+            f'gradientUnits="objectBoundingBox" x1="0" y1="0" x2="1" y2="0" '
+            f'gradientTransform="rotate({svg_rotate:.1f}, 0.5, 0.5)">'
+            f'{stops_str}</linearGradient></defs>'
+        )
 
     def _generate_polygon_points(self, prst: str, width: float, height: float) -> str:
         """Generate polygon points for preset shapes."""

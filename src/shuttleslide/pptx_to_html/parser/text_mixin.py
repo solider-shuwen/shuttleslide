@@ -89,7 +89,7 @@ class TextMixin:
                         run_italic = font.italic
                         run_font_name = font.name
                         run_font_size = font.size.pt if font.size else None
-                        run_color = self._extract_run_color(font)
+                        run_color = self._extract_run_color(font, run._r)
                         run_text = sanitize_pptx_text(run.text)
 
                         runs.append(RunElement(
@@ -129,6 +129,26 @@ class TextMixin:
                         font_size = master_style.font_size
                     if color is None and master_style.color:
                         color = master_style.color
+
+                # Apply layout placeholder lstStyle defaults (e.g., 52pt for
+                # ctrTitle placeholders) when master styles didn't provide a value
+                if (font_size is None or font_name is None or color is None):
+                    if (hasattr(self, '_current_layout') and self._current_layout
+                            and hasattr(shape, 'placeholder_format') and shape.placeholder_format):
+                        try:
+                            layout_defaults = self._get_layout_placeholder_defaults(
+                                self._current_layout, int(shape.placeholder_format.type))
+                            lst_level = para_level + 1  # lstStyle levels are 1-based
+                            if layout_defaults and lst_level in layout_defaults:
+                                lst_style = layout_defaults[lst_level]
+                                if font_size is None and lst_style.font_size:
+                                    font_size = lst_style.font_size
+                                if font_name is None and lst_style.font_name:
+                                    font_name = lst_style.font_name
+                                if color is None and lst_style.color:
+                                    color = lst_style.color
+                        except Exception:
+                            pass
 
                 # Parse bullet properties from OpenXML
                 bullet = None
@@ -185,6 +205,7 @@ class TextMixin:
         vert = None
         flip_h = False
         flip_v = False
+        scene3d_camera = None
 
         if hasattr(shape, "_element"):
             elem = shape._element
@@ -215,6 +236,17 @@ class TextMixin:
                     except (ValueError, TypeError):
                         pass
 
+            # Extract scene3d camera preset
+            camera = elem.find('.//a:scene3d/a:camera', ns)
+            if camera is not None:
+                prst = camera.get('prst')
+                if prst:
+                    scene3d_camera = prst
+
+        metadata = {"placeholder_type": shape.placeholder_format.type if hasattr(shape, "placeholder_format") else None}
+        if scene3d_camera:
+            metadata['scene3d_camera'] = scene3d_camera
+
         return TextElement(
             element_type="text",
             left=left,
@@ -225,7 +257,7 @@ class TextMixin:
             text=text,
             paragraphs=paragraphs,
             is_title=is_title,
-            metadata={"placeholder_type": shape.placeholder_format.type if hasattr(shape, "placeholder_format") else None},
+            metadata=metadata,
             rotation=rotation,
             vert=vert,
             flip_h=flip_h,
@@ -300,7 +332,7 @@ class TextMixin:
                     run_italic = font.italic
                     run_font_name = font.name
                     run_font_size = font.size.pt if font.size else None
-                    run_color = self._extract_run_color(font)
+                    run_color = self._extract_run_color(font, run._r)
                     run_text = sanitize_pptx_text(run.text)
 
                     runs.append(RunElement(
@@ -395,11 +427,31 @@ class TextMixin:
             italic = first_para.italic
             color = first_para.color
 
+        # If no explicit text color from runs, try fontRef in <p:style>
+        # (e.g., shapes like rightArrow with theme style: <a:fontRef><a:schemeClr val="lt1"/></a:fontRef>)
+        if color is None and hasattr(shape, '_element'):
+            try:
+                _ns_style = {'a': NAMESPACES['a'], 'p': NAMESPACES['p']}
+                _style = shape._element.find('.//p:style', _ns_style)
+                if _style is not None:
+                    _font_ref = _style.find('.//a:fontRef', _ns_style)
+                    if _font_ref is not None:
+                        _scheme_clr = _font_ref.find('.//a:schemeClr', _ns_style)
+                        if _scheme_clr is not None:
+                            _val = _scheme_clr.get('val')
+                            if _val and self.theme_color_extractor:
+                                color = self._scheme_clr_to_color(_val)
+            except Exception:
+                pass
+            except Exception:
+                pass
+
         # Extract rotation and transform information
         rotation = None
         vert = None
         flip_h = False
         flip_v = False
+        scene3d_camera = None
 
         if hasattr(shape, "_element"):
             elem = shape._element
@@ -430,6 +482,13 @@ class TextMixin:
                     except (ValueError, TypeError):
                         pass
 
+            # Extract scene3d camera preset
+            camera = elem.find('.//a:scene3d/a:camera', ns)
+            if camera is not None:
+                prst = camera.get('prst')
+                if prst:
+                    scene3d_camera = prst
+
         # Extract outline/border properties (line_color and line_width)
         line_color = None
         line_width = None
@@ -438,6 +497,7 @@ class TextMixin:
         # Accessing shape.line.color triggers python-pptx to resolve style references,
         # which can modify the XML and replace <noFill/> with <solidFill/>
         _line_has_noFill = False
+        _ln_exists = False
         if hasattr(shape, '_element'):
             try:
                 _ns = {'a': NAMESPACES['a'], 'p': NAMESPACES['p']}
@@ -445,6 +505,7 @@ class TextMixin:
                 if _spPr is not None:
                     _ln = _spPr.find('./a:ln', _ns)
                     if _ln is not None:
+                        _ln_exists = True
                         _noFill = _ln.find('./a:noFill', _ns)
                         if _noFill is not None:
                             _line_has_noFill = True
@@ -452,21 +513,25 @@ class TextMixin:
                 pass
 
         # Extract line color from shape.line (same logic as _parse_generic_shape)
-        if not _line_has_noFill and hasattr(shape, "line") and shape.line:
+        if _ln_exists and not _line_has_noFill and hasattr(shape, "line") and shape.line:
             try:
                 # Try color attribute first
                 if hasattr(shape.line, "color") and shape.line.color:
                     line_color_obj = shape.line.color
 
-                    # Try to get theme color first
-                    if hasattr(line_color_obj, "theme_color") and line_color_obj.theme_color is not None:
+                    # Determine color type to pick the right extraction path.
+                    # MSO_COLOR_TYPE: RGB(1), SCHEME(2)
+                    # Do NOT rely on theme_color is not None — NOT_THEME_COLOR (0) is not None.
+                    color_type = getattr(line_color_obj, 'type', None)
+
+                    if color_type == 2:  # SCHEME — theme color reference
                         theme_color = line_color_obj.theme_color
                         if self.theme_color_extractor:
                             theme_rgb = self.theme_color_extractor.get_theme_color(theme_color)
                             if theme_rgb:
                                 line_color = theme_rgb
 
-                    # If no theme color, try direct RGB
+                    # RGB or other concrete color
                     if not line_color and hasattr(line_color_obj, "rgb") and line_color_obj.rgb:
                         rgb_obj = line_color_obj.rgb
                         # Handle RGBColor objects
@@ -486,32 +551,17 @@ class TextMixin:
                 pass
 
         # If no direct line color, try to extract from style/lnRef (theme style reference)
-        if not _line_has_noFill and not line_color and hasattr(shape, '_element'):
+        if _ln_exists and not _line_has_noFill and not line_color and hasattr(shape, '_element'):
             try:
                 ns_xml = {'a': NAMESPACES['a'], 'p': NAMESPACES['p']}
-
-                # Find style element first, then lnRef child
                 style = shape._element.find('.//p:style', ns_xml)
                 if style is not None:
                     ln_ref = style.find('.//a:lnRef', ns_xml)
                     if ln_ref is not None:
-                        # Check for schemeClr (theme color reference)
                         scheme_clr = ln_ref.find('.//a:schemeClr', ns_xml)
                         if scheme_clr is not None:
-                            val = scheme_clr.get('val')  # e.g., "accent1", "accent2", etc.
-                            if val and self.theme_color_extractor:
-                                # Convert scheme color name to theme color enum
-                                theme_color_name = val.upper()
-                                # Add underscore between letter and number (e.g., "ACCENT3" -> "ACCENT_3")
-                                theme_color_name = re.sub(r'([A-Z]+)(\d+)', r'\1_\2', theme_color_name)
-                                try:
-                                    from pptx.enum.dml import MSO_THEME_COLOR
-                                    theme_color_enum = getattr(MSO_THEME_COLOR, theme_color_name)
-                                    theme_rgb = self.theme_color_extractor.get_theme_color(theme_color_enum)
-                                    if theme_rgb:
-                                        line_color = theme_rgb
-                                except (AttributeError, ValueError):
-                                    pass
+                            val = scheme_clr.get('val')
+                            line_color = self._scheme_clr_to_color(val)
             except Exception:
                 pass
 
@@ -548,4 +598,5 @@ class TextMixin:
             vertical_align=vertical_align,
             line_color=line_color,
             line_width=line_width,
+            metadata={'scene3d_camera': scene3d_camera} if scene3d_camera else None,
         )

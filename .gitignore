@@ -147,6 +147,7 @@ Thumbs.db
 *.pptx
 test_output/
 temp/
+tmp/
 output_assets/
 pptx-to-html5-main/
 ECMA-376-1_5th_edition_december_2016/

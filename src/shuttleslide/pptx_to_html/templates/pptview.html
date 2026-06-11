@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset='UTF-8'>
+    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+    <title>{{ title }}</title>
+    <style>
+        {{ styles|safe }}
+    </style>
+</head>
+<body>
+    <!-- PPT Editor View -->
+    <div class="ppt-editor">
+        <!-- Left sidebar: slide thumbnails -->
+        <div class="sidebar">
+            <div class="thumbnail-list">
+                {% for slide in slides %}
+                <div class="thumbnail{% if loop.first %} active{% endif %}" data-slide-index="{{ loop.index0 }}" onclick="PPTView.goTo({{ loop.index0 }})">
+                    <div class="thumbnail-label">{{ loop.index }}</div>
+                    <div class="thumbnail-content" style="width: {{ slide_width }}px; height: {{ slide_height }}px;">
+                        {% if slide.background_style %}
+                        <div class='slide-bg' style='{{ slide.background_style }}'></div>
+                        {% endif %}
+                        {% for element in slide.elements %}
+                            {{ element.html|safe }}
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- Main panel: current slide -->
+        <div class="main-panel">
+            <div class="slide-viewer">
+                {% for slide in slides %}
+                <div class="slide-full{% if loop.first %} active{% endif %}" data-slide-index="{{ loop.index0 }}">
+                    <div class="slide-container" style="width: {{ slide_width }}px; height: {{ slide_height }}px;{% if slide.background_style %} {{ slide.background_style }}{% endif %}">
+                        {% for element in slide.elements %}
+                            {{ element.html|safe }}
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+
+            <!-- Slide counter & play button -->
+            <div class="toolbar">
+                <span class="slide-counter">1 / {{ slides|length }}</span>
+                <button class="play-btn" onclick="PPTView.play()" title="Play presentation (F5)">
+                    &#9654; Play
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Fullscreen play overlay -->
+    <div class="play-overlay" id="playOverlay">
+        <div class="play-slides">
+            {% for slide in slides %}
+            <section class="play-slide{% if loop.first %} present{% endif %}" data-slide-index="{{ loop.index0 }}">
+                <div class="slide-container" style="width: {{ slide_width }}px; height: {{ slide_height }}px;{% if slide.background_style %} {{ slide.background_style }}{% endif %}">
+                    {% for element in slide.elements %}
+                        {{ element.html|safe }}
+                    {% endfor %}
+                </div>
+            </section>
+            {% endfor %}
+        </div>
+        <div class="play-controls">
+            <button class="play-nav-btn" onclick="PPTView.prevPlay()">&#10094;</button>
+            <span class="play-counter" id="playCounter">1 / {{ slides|length }}</span>
+            <button class="play-nav-btn" onclick="PPTView.nextPlay()">&#10095;</button>
+            <button class="play-exit-btn" onclick="PPTView.exitPlay()" title="Exit (Esc)">✕ Exit</button>
+        </div>
+    </div>
+
+    <script>
+        {{ script|safe }}
+    </script>
+</body>
+</html>
