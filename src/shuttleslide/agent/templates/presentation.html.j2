@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="{{ lang|default('en') }}">
+
+<head>
+    <meta charset="utf-8" />
+    <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+    <title>{{ title|default('Slide') }}</title>
+    {% if tailwind_script %}
+    {# Tailwind JIT inlined from cached download at ~/.shuttleslide/cdn/tailwind.js.
+       Works offline; the renderer only sets tailwind_script when the cache is
+       populated. #}
+    <script>{{ tailwind_script|safe }}</script>
+    {% else %}
+    <script src="{{ tailwind_cdn_url|default('https://cdn.tailwindcss.com') }}"></script>
+    {% endif %}
+    {# Google Fonts are intentionally NOT inlined: fetching the full Noto Sans SC
+       TTFs as base64 produces a ~47 MB CSS file, and the original CSS uses
+       @unicode-range so the browser fetches only what's needed at runtime.
+       We rely on a cross-platform system font stack instead — see the body
+       font-family below. Set inline_cdn_assets=False on SlideHTMLRenderer to
+       emit a live <link> tag if you really need Roboto/Noto Sans SC. #}
+    {% if material_icons_css %}
+    <style>{{ material_icons_css|safe }}</style>
+    {% else %}
+    <link href="{{ material_icons_cdn_url|default('https://fonts.googleapis.com/icon?family=Material+Icons') }}" rel="stylesheet" />
+    {% endif %}
+    <style type="text/tailwindcss">
+        @layer utilities {
+            .ppt-slide {
+                @apply relative w-[{{ canvas_width_px|default(1280) }}px] h-[{{ canvas_height_px|default(720) }}px] mx-auto box-border;
+            }
+        }
+    </style>
+    <style>
+        body {
+            font-family: {{ body_font|default('"Inter", "Roboto", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", sans-serif', true) }};
+            background: {{ body_background|default('#0a0e27', true) }};
+        }
+
+        .title-font {
+            font-family: {{ title_font|default('"Inter", "Roboto", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", sans-serif', true) }};
+        }
+    </style>
+    <style>
+        .material-icons {
+            width: 1em;
+        }
+    </style>
+    <style>
+        .material-icons {
+            direction: rtl;
+        }
+    </style>
+</head>
+
+<body>
+    {{ slide_body|safe }}
+</body>
+
+</html>

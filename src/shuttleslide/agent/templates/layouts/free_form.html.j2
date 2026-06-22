@@ -1,0 +1,18 @@
+{# free_form layout: escape hatch — LLM writes controlled HTML directly.
+
+   Does NOT use the slot model. The slide-builder's `set_free_form_html`
+   tool already sanitized the HTML (no <script>/<iframe>/<object>/<embed>/
+   <link>/<style>, no javascript: URLs, no on*= handlers, max 8000 chars).
+
+   Outer <head> (Tailwind CDN, fonts, Material Icons, body bg, .title-font,
+   .ppt-slide container class) is provided by presentation.html.j2 — this
+   template only wraps the LLM-written fragment in the .ppt-slide box and
+   applies the slide background.
+
+   Slots:
+     html: str  (sanitized HTML fragment written by the LLM)
+#}
+<div class="ppt-slide overflow-hidden box-border"
+     style="background: {% if slots.background and slots.background.color %}{{ slots.background.color }}{% else %}{{ theme.bg_color }}{% endif %}">
+    {{ slots.html|safe }}
+</div>

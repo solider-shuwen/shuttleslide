@@ -156,3 +156,15 @@ CLAUDE.md
 intro.md
 .gitignore
 output.html
+claw-code-parity-main/
+ppt-master-main/
+
+# Extension-generated artifacts (audio / manifests from commercial extensions
+# such as shuttleslide-pro's narration feature). Excluded so test runs do not
+# leak private audio or LLM-decided weights into the public repo.
+audio/
+manifest.json
+manifest_*.json
+*.env
+!*.env.example
+tests/

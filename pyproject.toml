@@ -32,6 +32,11 @@ dependencies = [
     "lxml>=4.9.0",
     "Pillow>=9.0.0",
     "jinja2>=3.1.0",
+    "openai>=1.0,<2.0",
+    "trafilatura>=1.12.0",
+    "requests>=2.28.0",
+    "playwright>=1.40.0",
+    "pytest-asyncio>=0.21.0",
 ]
 
 [project.optional-dependencies]
@@ -55,6 +60,9 @@ where = ["src"]
 
 [tool.setuptools.package-dir]
 "" = "src"
+
+[tool.setuptools.package-data]
+"shuttleslide.agent" = ["templates/*.html.j2", "templates/elements/*.html.j2"]
 
 [tool.black]
 line-length = 100
