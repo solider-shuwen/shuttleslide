@@ -94,6 +94,70 @@ class PipelineDoneMsg:
     html_paths: List[str] = field(default_factory=list)
 
 
+@dataclass
+class PipelineStateMsg:
+    """Pipeline lifecycle state change.
+
+    Drives the UI's high-level screen switching (config form ↔ pipeline
+    review). ``state`` is one of:
+      - ``idle``     — no run active (initial / after reset)
+      - ``starting`` — config received, orchestrator being constructed
+      - ``running``  — orchestrator task is executing
+      - ``done``     — ``emit_pipeline_done`` already fired; success
+      - ``failed``   — fatal error; ``error`` carries the message
+
+    ``error`` is non-empty only when ``state == "failed"``.
+    """
+
+    type: Literal["pipeline_state"] = "pipeline_state"
+    state: str = "idle"
+    error: Optional[str] = None
+
+
+@dataclass
+class LogEntryMsg:
+    """A single log entry surfaced to the review UI's log drawer.
+
+    Fired from the ``on_llm_response`` callback (one per LLM call) and
+    potentially from future instrumentation points. Distinct from
+    :class:`ErrorMsg` (which is fatal/error-level) and
+    :class:`StageCompleteMsg` (which fires once per stage boundary).
+    """
+
+    type: Literal["log_entry"] = "log_entry"
+    scope: str = ""        # e.g. "llm:slide_builder:3/10", "tool:bing_web"
+    message: str = ""      # formatted summary — one line
+    level: str = "info"    # "info" | "warn" | "error" | "ok"
+    timestamp: float = 0.0
+
+
+@dataclass
+class StageProgressMsg:
+    """Live progress for the currently-running stage.
+
+    Fires from ``_on_llm_response`` (one per LLM call) so the UI can render
+    a real progress bar instead of inferring from log lines. For countable
+    stages (outline / images / slides), ``current`` / ``total`` / ``percent``
+    / ``eta_seconds`` are populated from the LLM event's ``slide_index`` and
+    ``slide_total`` fields. For atomic stages (theme / rendered) those fields
+    are ``None`` and the UI shows an elapsed timer + indeterminate animation.
+
+    Distinct from :class:`StageCompleteMsg` (which fires once at the stage
+    boundary) and :class:`LogEntryMsg` (which carries a textual log line for
+    the drawer; this message carries structured progress for the strip).
+    """
+
+    type: Literal["stage_progress"] = "stage_progress"
+    stage: str = ""
+    current: Optional[int] = None        # e.g. 4 slides done
+    total: Optional[int] = None          # e.g. 12 slides total
+    percent: Optional[float] = None      # 0-100; None = indeterminate
+    elapsed_seconds: Optional[float] = None  # since first event for this stage
+    eta_seconds: Optional[float] = None  # rolling-average estimate; None = unknown
+    label: str = ""                      # "Slide 4 / 12" — display-friendly
+    timestamp: float = 0.0
+
+
 # ---------------------------------------------------------------------------
 # Client -> Server
 # ---------------------------------------------------------------------------
@@ -105,15 +169,6 @@ class ApproveStageMsg:
 
     type: Literal["approve_stage"] = "approve_stage"
     stage: str = ""
-
-
-@dataclass
-class CancelStageMsg:
-    """Reviewer cancels the pipeline. Orchestrator raises ReviewCancelledError."""
-
-    type: Literal["cancel_stage"] = "cancel_stage"
-    stage: str = ""
-    reason: str = ""
 
 
 @dataclass
@@ -164,11 +219,13 @@ ServerMessage = Union[
     EditRejectedMsg,
     ErrorMsg,
     PipelineDoneMsg,
+    PipelineStateMsg,
+    LogEntryMsg,
+    StageProgressMsg,
 ]
 
 ClientMessage = Union[
     ApproveStageMsg,
-    CancelStageMsg,
     RequestEditMsg,
     UploadImageMsg,
     UndoMsg,

@@ -6,36 +6,33 @@ Wires the four stages together and threads a single AgentState through them:
   Stage 3: Slide Builder    -> state.slides  (one call per slide)
   Stage 4: HTML Renderer    -> state.html_paths
 
-This is intentionally a sequential pipeline with one bounded inner loop
-(in Stage 3). No graph framework needed.
+This is intentionally a sequential pipeline. Stage order and dispatch
+come from the ``StageRegistry`` (see ``agent/review/registry.py``);
+core stages live in ``agent/review/core_stages.py`` and external
+packages add their own via the ``shuttleslide.review.stages`` entry
+point group.
 """
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import TYPE_CHECKING, List, Optional, Union
 
 from shuttleslide.agent.config import AgentConfig
 from shuttleslide.agent.dsl_to_html import SlideHTMLRenderer
 from shuttleslide.agent.llm import LLMClient
-from shuttleslide.agent.nodes.image_acquirer import run_image_acquirer
-from shuttleslide.agent.nodes.outline_planner import (
-    run_outline_planner,
-    run_slide_detail_generator,
-    run_structure_planner,
-)
-from shuttleslide.agent.nodes.slide_builder import run_slide_builder
-from shuttleslide.agent.nodes.theme_designer import run_theme_designer
 from shuttleslide.agent.state import AgentState
 from shuttleslide.agent.tools.registry import ToolRegistry, get_default_registry
-from shuttleslide.html_to_pptx.schema import (
-    PresentationDSL,
-    SlideDSL,
-    ThemeDef,
-    dump_presentation,
-)
+from shuttleslide.html_to_pptx.schema import PresentationDSL
+
+if TYPE_CHECKING:
+    # Imported only for type-checking to avoid the cycle:
+    # ``review.__init__`` eagerly pulls in ``interactive_orchestrator``
+    # which imports back into ``agent.orchestrator``. Runtime references
+    # go through lazy imports inside _resolve_stages / _build_stage_context.
+    from shuttleslide.agent.review.registry import StageRegistry
+    from shuttleslide.agent.review.stage import Stage, StageContext
 
 
 @dataclass
@@ -48,13 +45,14 @@ class OrchestratorResult:
 
 
 class AgentOrchestrator:
-    """Runs the 4-stage pipeline."""
+    """Runs the registry-driven stage pipeline."""
 
     def __init__(
         self,
         config: AgentConfig,
         registry: Optional[ToolRegistry] = None,
         renderer: Optional[SlideHTMLRenderer] = None,
+        stage_registry: Optional[StageRegistry] = None,
     ) -> None:
         self.config = config
         # Use the module-level default registry (already populated by importing
@@ -75,6 +73,48 @@ class AgentOrchestrator:
         self._vlm_verifier = None
         self._browser_manager = None
         self._web_deps_built = False
+        # Resolve stage order once at construction time. A RegistryError
+        # (cycle, multiple terminals, broken pro entry-point) falls back
+        # to the core-only registry so a broken extension cannot wedge
+        # the pipeline. Tests that want a stub stage set pass
+        # ``stage_registry`` explicitly.
+        self._stages: List[Stage] = self._resolve_stages(stage_registry)
+
+    def _resolve_stages(self, stage_registry: Optional[StageRegistry]) -> List[Stage]:
+        """Return the resolved stage order, falling back to core-only
+        on registry errors.
+
+        ``stage_registry`` lets tests swap in a stub registry without
+        touching entry points. ``None`` means "use the full registry"
+        (core + entry-point extensions); callers that explicitly want
+        core-only can pass ``default_registry()``.
+        """
+        # Lazy import — see module-level TYPE_CHECKING note.
+        from shuttleslide.agent.review.registry import (
+            RegistryError,
+            default_registry,
+            full_registry,
+        )
+
+        if stage_registry is not None:
+            try:
+                return stage_registry.resolve_order()
+            except RegistryError as exc:
+                # A caller-provided registry that fails to resolve is a
+                # programming error — surface it rather than silently
+                # fall back. The fallback below is for the entry-point
+                # loading path where pro packages may be broken.
+                raise
+        try:
+            return full_registry().resolve_order()
+        except RegistryError as exc:
+            import sys
+            print(
+                f"[shuttleslide] warning: stage registry failed to resolve "
+                f"({exc}); falling back to core-only stages",
+                file=sys.stderr,
+            )
+            return default_registry().resolve_order()
 
     async def run(
         self,
@@ -99,12 +139,108 @@ class AgentOrchestrator:
         style_hint: Optional[str],
         target_count: Optional[int],
     ) -> OrchestratorResult:
-        state = self._make_state(topic=topic, style_hint=style_hint, target_count=target_count)
-        await self._run_stage_theme(state)
-        await self._run_stage_outline(state)
-        await self._run_stage_images(state)
-        await self._run_stage_slides(state)
-        return await self._finalize(state)
+        """Drive every registered stage in resolved order.
+
+        Per stage:
+          1. ``_pre_stage_hook`` may short-circuit (returns True) when
+             the stage's output is already in state (e.g. loaded from
+             disk). The hook still fires so review/telemetry sees the
+             snapshot.
+          2. ``stage.run(ctx)`` does the work.
+          3. ``_post_stage_hook`` fires after completion.
+          4. The terminal stage's ``finalize`` produces the return value.
+
+        A stage that raises is caught here: the error is logged via
+        ``state.add_warning`` and the broadcaster (when attached) gets
+        a non-fatal ``emit_error``. Downstream stages continue unless
+        one of them refuses to tolerate the missing input — that
+        decision belongs to each stage's ``run``, not this loop.
+        """
+        state = await self._prepare_state(
+            topic=topic, style_hint=style_hint, target_count=target_count
+        )
+        result: Optional[OrchestratorResult] = None
+        for stage in self._stages:
+            try:
+                if await self._pre_stage_hook(stage, state):
+                    await self._post_stage_hook(stage, state)
+                    if stage.terminal:
+                        result = stage.finalize(state)
+                    continue
+                ctx = self._build_stage_context(state)
+                await stage.run(ctx)
+                await self._post_stage_hook(stage, state)
+                if stage.terminal:
+                    result = stage.finalize(state)
+            except Exception as exc:
+                # InteractiveOrchestrator's ReviewCancelledError is
+                # re-raised so the CLI can surface "user cancelled".
+                # We import lazily to avoid a static cycle.
+                from shuttleslide.agent.review.interactive_orchestrator import (
+                    ReviewCancelledError,
+                )
+                if isinstance(exc, ReviewCancelledError):
+                    raise
+                state.add_warning(f"stage {stage.name!r} failed: {exc}")
+                if stage.terminal and result is None:
+                    # Terminal stage failed — synthesise a partial result
+                    # so callers get an OrchestratorResult instead of None.
+                    result = OrchestratorResult(
+                        state=state,
+                        html_paths=[],
+                        presentation=_empty_presentation(),
+                    )
+        if result is None:
+            # No terminal stage produced a result (only happens if the
+            # registry was misconfigured). Defensive — orchestrators
+            # built through the normal path always have a terminal.
+            result = OrchestratorResult(
+                state=state,
+                html_paths=[],
+                presentation=_empty_presentation(),
+            )
+        return result
+
+    def _build_stage_context(self, state: AgentState) -> StageContext:
+        """Build a fresh ``StageContext`` for the current state.
+
+        One context per stage call — stages should not assume the same
+        instance is reused. The web-deps fields are populated lazily
+        by ``_build_web_acquisition_deps`` at the start of ``run()``.
+        """
+        # Lazy import — see module-level TYPE_CHECKING note.
+        from shuttleslide.agent.review.stage import StageContext
+
+        output_dir = (
+            Path(self.config.output_dir) if self.config.output_dir else None
+        )
+        return StageContext(
+            state=state,
+            llm=self.llm,
+            config=self.config,
+            tool_registry=self.registry,
+            output_dir=output_dir,
+            renderer=self.renderer,
+            web_search_provider=self._web_search_provider,
+            vlm_verifier=self._vlm_verifier,
+            browser_manager=self._browser_manager,
+        )
+
+    async def _prepare_state(
+        self,
+        topic: Optional[str],
+        style_hint: Optional[str],
+        target_count: Optional[int],
+    ) -> AgentState:
+        """Build (or load) the AgentState for this run.
+
+        Base implementation always builds fresh. Subclasses override
+        to hydrate from disk — see ``InteractiveOrchestrator._prepare_state``
+        which loads from ``state_cache_path`` when configured.
+        """
+        return self._make_state(
+            topic=topic, style_hint=style_hint, target_count=target_count
+        )
 
     def _make_state(
         self,
@@ -133,7 +269,7 @@ class AgentOrchestrator:
             canvas_height_emu=self.config.canvas_height_emu,
         )
 
-    async def _post_stage_hook(self, stage: str, state: AgentState) -> None:
+    async def _post_stage_hook(self, stage: Stage, state: AgentState) -> None:
         """Hook invoked after each stage completes. Default is no-op.
 
         Subclasses (e.g. InteractiveOrchestrator) override this to insert
@@ -142,157 +278,17 @@ class AgentOrchestrator:
         """
         return None
 
-    async def _run_stage_theme(self, state: AgentState) -> None:
-        """Stage 1: Theme Designer — designs global theme (colors/fonts/decoration)."""
-        await run_theme_designer(
-            state=state,
-            llm=self.llm,
-            tools=self.registry,
-            temperature=self.config.temperature,
-            max_tokens=2048,
-            on_llm_response=self.config.on_llm_response,
-        )
-        await self._post_stage_hook("theme", state)
+    async def _pre_stage_hook(self, stage: Stage, state: AgentState) -> bool:
+        """Hook invoked before each stage runs. Return True to skip the
+        stage's work entirely (the stage still fires
+        ``_post_stage_hook`` so downstream review/telemetry sees the
+        snapshot).
 
-    async def _run_stage_outline(self, state: AgentState) -> None:
-        """Stage 2: Outline Planner — progressive (2a skeleton + 2b detail).
-
-        Two-stage path: structure planner (1 LLM call) + per-slide detail
-        generator (N LLM calls). Falls back to the one-shot
-        run_outline_planner when either stage raises — the one-shot path
-        is still maintained as the production fallback so a bad model day
-        never blocks deck generation entirely.
+        Default is False — always run the stage. Subclasses override
+        to short-circuit when state was loaded from a cache (see
+        InteractiveOrchestrator + state_persistence).
         """
-        try:
-            # Stage 2a: deck skeleton (thesis + MECE groups + per-slide intent)
-            await run_structure_planner(
-                state=state,
-                llm=self.llm,
-                tools=self.registry,
-                temperature=self.config.temperature,
-                max_tokens=self.config.max_tokens,
-                on_llm_response=self.config.on_llm_response,
-            )
-            # Stage 2b: per-slide detail (key_points + layout_hint + images)
-            # Slightly higher temperature for variety across slides.
-            detail_max_tokens = None
-            await run_slide_detail_generator(
-                state=state,
-                llm=self.llm,
-                tools=self.registry,
-                temperature=max(0.0, min(1.0, self.config.temperature + 0.1)),
-                max_tokens=detail_max_tokens,
-                on_llm_response=self.config.on_llm_response,
-            )
-        except Exception as exc:
-            # Progressive path failed — wipe any partial state and retry
-            # with the one-shot planner. We intentionally catch broadly
-            # here because both stages can raise (skeleton_planner raises
-            # RuntimeError after retries; slide_detail_generator raises
-            # only on hard preconditions like missing outline).
-            import sys
-            print(
-                f"[shuttleslide] warning: progressive outline failed ({exc}); "
-                f"falling back to one-shot outline_planner",
-                file=sys.stderr,
-            )
-            state.add_warning(
-                f"progressive outline failed ({exc}); fell back to one-shot"
-            )
-            # Clear half-built state so run_outline_planner starts fresh.
-            # The detail generator may have enriched some slides already;
-            # define_outline will overwrite state.outline wholesale.
-            state.outline = []
-            state.deck_skeleton = None
-            await run_outline_planner(
-                state=state,
-                llm=self.llm,
-                tools=self.registry,
-                temperature=self.config.temperature,
-                max_tokens=self.config.max_tokens,
-                on_llm_response=self.config.on_llm_response,
-            )
-        await self._post_stage_hook("outline", state)
-
-    async def _run_stage_images(self, state: AgentState) -> None:
-        """Stage 2.5: Image Acquirer — one call per image spec.
-
-        Routes each spec to svg or web path based on spec.source_type.
-        No-op if no slide declares any images. Web specs fall back to
-        svg when web_search_provider / vlm_verifier are unavailable.
-        output_dir is required for web specs (file-externalized model):
-        without it, acquire_web_image returns False and the spec falls
-        back to svg.
-        """
-        output_dir = Path(self.config.output_dir) if self.config.output_dir else None
-        await run_image_acquirer(
-            state=state,
-            llm=self.llm,
-            tools=self.registry,
-            temperature=self.config.temperature,
-            max_tokens=self.config.max_tokens,
-            svg_max_tokens=self.config.svg_generator_max_tokens,
-            web_search_provider=self._web_search_provider,
-            vlm_verifier=self._vlm_verifier,
-            browser_manager=self._browser_manager,
-            output_dir=output_dir,
-            on_llm_response=self.config.on_llm_response,
-        )
-        await self._post_stage_hook("images", state)
-
-    async def _run_stage_slides(self, state: AgentState) -> None:
-        """Stage 3: Slide Builder — one LLM call per slide."""
-        output_dir = (
-            Path(self.config.output_dir) if self.config.output_dir else None
-        )
-        for i in range(len(state.outline)):
-            await run_slide_builder(
-                state=state,
-                llm=self.llm,
-                tools=self.registry,
-                slide_index=i,
-                # Slightly lower temperature for layout precision.
-                temperature=max(0.0, self.config.temperature - 0.1),
-                max_tokens=self.config.max_tokens,
-                max_iterations=self.config.max_tool_iterations,
-                on_llm_response=self.config.on_llm_response,
-                output_dir=output_dir,
-            )
-        await self._post_stage_hook("slides", state)
-
-    async def _finalize(self, state: AgentState) -> OrchestratorResult:
-        """Stage 4: HTML Renderer — render slides to standalone HTML files.
-
-        Also dumps the DSL JSON next to the HTML for inspection / debugging.
-        """
-        presentation = _state_to_presentation(state)
-        # Thread canvas dimensions into the PPTX (schema defaults reproduce
-        # 16:9; the caller may have overridden them via AgentConfig).
-        presentation.slide_width_emu = state.canvas_width_emu
-        presentation.slide_height_emu = state.canvas_height_emu
-        html_paths: List[Path] = []
-        if self.config.output_dir:
-            out_dir = Path(self.config.output_dir)
-            html_paths = self.renderer.render_slides_to_files(
-                presentation,
-                out_dir,
-                title_prefix=(state.outline[0].get("title", "")[:80] or None) if state.outline else None,
-                canvas_width_emu=state.canvas_width_emu,
-                canvas_height_emu=state.canvas_height_emu,
-            )
-            dsl_path = out_dir / "presentation.json"
-            dsl_path.write_text(
-                json.dumps(dump_presentation(presentation), ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-
-        # Fire the rendered hook AFTER files are on disk so reviewers can
-        # open them. Note this is async to match the other stages; the base
-        # implementation is a no-op so callers that don't override it pay
-        # only an awaitable-returning call.
-        await self._post_stage_hook("rendered", state)
-
-        return OrchestratorResult(state=state, html_paths=html_paths, presentation=presentation)
+        return False
 
     # ------------------------------------------------------------------
     # Web image acquisition deps
@@ -428,21 +424,17 @@ class AgentOrchestrator:
             self._browser_manager = None
 
 
-def _state_to_presentation(state: AgentState) -> PresentationDSL:
-    """Build a PresentationDSL from the orchestrator state."""
-    theme_dict = state.theme or {}
-    theme = ThemeDef(
-        primary_color=theme_dict.get("primary_color", "#133EFF"),
-        accent_color=theme_dict.get("accent_color", "#00CD82"),
-        warn_color=theme_dict.get("warn_color", "#FF5722"),
-        bg_color=theme_dict.get("bg_color", "#FEFEFE"),
-        text_color=theme_dict.get("text_color", "#1F2937"),
-        font_title=theme_dict.get("font_title", "Roboto"),
-        font_body=theme_dict.get("font_body", "Roboto"),
-    )
+def _empty_presentation() -> PresentationDSL:
+    """Synthesise a minimal PresentationDSL for failure paths.
 
-    slides: List[SlideDSL] = [s for s in state.slides if s is not None]
-    return PresentationDSL(theme=theme, slides=slides)
+    Used when the terminal stage raised before producing output, so
+    callers still get an ``OrchestratorResult`` shape. The presentation
+    has default theme and zero slides — sufficient for ``html_paths=[]``
+    round-tripping through downstream consumers.
+    """
+    from shuttleslide.html_to_pptx.schema import ThemeDef
+
+    return PresentationDSL(theme=ThemeDef(), slides=[])
 
 
 # ---------------------------------------------------------------------------

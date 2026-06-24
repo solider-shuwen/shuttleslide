@@ -120,6 +120,19 @@ class AgentState:
     # produce "svg_file" / "image_file".
     slide_images: Dict[int, Dict[str, Dict[str, Any]]] = field(default_factory=dict)
 
+    # Extension stage outputs: stage_name -> JSON-safe dict.
+    #
+    # This is the ONLY sanctioned place for pro / extension stages
+    # (script generation, voice-over, subtitles, ...) to write their
+    # outputs. Pro stages must NOT add new top-level fields to
+    # AgentState — the dataclass shape stays stable across versions
+    # so state_persistence round-trips and tests don't break every
+    # time a stage is added.
+    #
+    # Core stages continue to use their dedicated fields (state.theme,
+    # state.outline, ...). This dict is purely the extension channel.
+    stage_outputs: Dict[str, Any] = field(default_factory=dict)
+
     # Scratch pointer for the set_svg tool to know which spec it's serving.
     # image_acquirer sets this immediately before each LLM call; the set_svg
     # tool reads it to know where to store the result. None outside the

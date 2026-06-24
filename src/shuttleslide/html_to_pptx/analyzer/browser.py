@@ -40,7 +40,7 @@ class BrowserManager:
         if self._browser is not None:
             return  # Already started
         self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(headless=False)
+        self._browser = await self._playwright.chromium.launch(headless=True)
         logger.info("Browser started (viewport=%dx%d)", self.viewport[0], self.viewport[1])
 
     async def stop(self) -> None:

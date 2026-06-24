@@ -1,0 +1,1301 @@
+/* ============ Design tokens (Apple-inspired, dual-mode) ============ */
+/* Light values match Apple's HIG light system colors; dark values
+   match macOS system dark colors. Toggling <html data-theme> flips
+   every derived token. No backdrop-filter anywhere — depth comes
+   from layered shadows and translucent overlays. */
+:root,
+[data-theme="light"] {
+  /* Background hierarchy — 3 levels */
+  --bg-canvas:    #fbfbfd;   /* page — Apple's actual page bg */
+  --bg-elevated:  #ffffff;   /* cards */
+  --bg-overlay:   rgba(255, 255, 255, 0.72); /* floating panels — NO blur, just translucency */
+
+  /* Text hierarchy */
+  --text-primary:   #1d1d1f;   /* Apple primary text */
+  --text-secondary: #6e6e73;   /* Apple secondary */
+  --text-tertiary:  #86868b;
+  --text-disabled:  #d2d2d7;
+
+  /* Border hierarchy */
+  --border-subtle: rgba(0, 0, 0, 0.06);
+  --border-default:#d2d2d7;
+  --border-strong: #86868b;
+
+  /* Accent — unchanged indigo, refined scale */
+  --accent:        #6366f1;
+  --accent-hover:  #5457e5;
+  --accent-active: #4f46e5;
+  --accent-soft:   rgba(99, 102, 241, 0.10);
+  --accent-ring:   rgba(99, 102, 241, 0.35);
+
+  /* Status — Apple system colors */
+  --success:      #34c759;
+  --success-soft: rgba(52, 199, 89, 0.12);
+  --warn:         #ff9f0a;
+  --warn-soft:    rgba(255, 159, 10, 0.12);
+  --error:        #ff3b30;
+  --error-soft:   rgba(255, 59, 48, 0.12);
+  --info:         #0a84ff;
+  --info-soft:    rgba(10, 132, 255, 0.12);
+
+  /* Shadows — layered, no backdrop-filter */
+  --shadow-xs:    0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-sm:    0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.03);
+  --shadow-md:    0 4px 12px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04);
+  --shadow-lg:    0 12px 32px rgba(0, 0, 0, 0.08), 0 4px 12px rgba(0, 0, 0, 0.05);
+  --shadow-accent:0 4px 14px rgba(99, 102, 241, 0.28);
+
+  /* Radii — Apple uses larger values than the previous palette */
+  --radius-xs:   6px;
+  --radius-sm:   8px;
+  --radius-md:   12px;
+  --radius-lg:   16px;
+  --radius-xl:   20px;
+  --radius-pill: 999px;
+
+  /* Motion — Apple spring-like cubic-bezier curves */
+  --ease-standard:  cubic-bezier(0.4, 0.0, 0.2, 1);
+  --ease-spring:    cubic-bezier(0.34, 1.56, 0.64, 1);  /* slight overshoot */
+  --ease-out:       cubic-bezier(0.16, 1, 0.3, 1);      /* Apple's signature ease-out */
+  --dur-fast:    120ms;
+  --dur-base:    200ms;
+  --dur-slow:    320ms;
+
+  /* Spacing scale — 4pt grid */
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+  --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-10: 40px;
+
+  /* Typography — Apple stack first so Mac users get SF Pro natively */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text',
+               'Segoe UI', 'Inter', Roboto, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', 'Cascadia Code',
+               Menlo, Consolas, monospace;
+}
+
+[data-theme="dark"] {
+  /* Backgrounds — true black canvas (Apple's OLED-friendly choice) */
+  --bg-canvas:    #000000;
+  --bg-elevated:  #1c1c1e;   /* macOS system elevatedBackground */
+  --bg-overlay:   rgba(28, 28, 30, 0.72);
+
+  /* Text — Apple dark-mode system colors */
+  --text-primary:   #f5f5f7;
+  --text-secondary: #aeaeb2;
+  --text-tertiary:  #8e8e93;
+  --text-disabled:  #48484a;
+
+  /* Borders — much more subtle on dark */
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-default:rgba(255, 255, 255, 0.10);
+  --border-strong: rgba(255, 255, 255, 0.18);
+
+  /* Accent — brightened for contrast against black */
+  --accent:        #818cf8;   /* indigo-400 */
+  --accent-hover:  #a5b4fc;
+  --accent-active: #c7d2fe;
+  --accent-soft:   rgba(129, 140, 248, 0.16);
+  --accent-ring:   rgba(129, 140, 248, 0.40);
+
+  /* Status — Apple's dark-mode system colors */
+  --success:      #30d158;
+  --success-soft: rgba(48, 209, 88, 0.16);
+  --warn:         #ff9f0a;
+  --warn-soft:    rgba(255, 159, 10, 0.16);
+  --error:        #ff453a;
+  --error-soft:   rgba(255, 69, 58, 0.16);
+  --info:         #0a84ff;
+  --info-soft:    rgba(10, 132, 255, 0.16);
+
+  /* Shadows — on black, shadows are weaker; rely on border highlights */
+  --shadow-xs:    0 1px 2px rgba(0, 0, 0, 0.40);
+  --shadow-sm:    0 1px 3px rgba(0, 0, 0, 0.50), 0 1px 2px rgba(0, 0, 0, 0.40);
+  --shadow-md:    0 4px 12px rgba(0, 0, 0, 0.55), 0 1px 3px rgba(0, 0, 0, 0.45);
+  --shadow-lg:    0 12px 32px rgba(0, 0, 0, 0.65), 0 4px 12px rgba(0, 0, 0, 0.50);
+  --shadow-accent:0 4px 14px rgba(129, 140, 248, 0.40);
+}
+
+/* ============ Legacy token aliases ============ */
+/* Existing CSS still references the old names (--bg, --card, ...).
+   These aliases resolve to the new tokens via var(), so they flip
+   with [data-theme] automatically. Migrate references to the new
+   names over time and remove aliases once unused. */
+:root {
+  --bg:            var(--bg-canvas);
+  --bg-subtle:     var(--bg-elevated);
+  --card:          var(--bg-elevated);
+  --border:        var(--border-default);
+  /* --border-strong kept — same name in both scales */
+  --text:          var(--text-primary);
+  --text-muted:    var(--text-secondary);
+  --text-subtle:   var(--text-tertiary);
+  /* --accent / --accent-hover / --accent-soft kept — same names */
+  --accent-tint:   var(--accent-soft);
+  --success-bg:    var(--success-soft);
+  --error-bg:      var(--error-soft);
+  --warn-bg:       var(--warn-soft);
+  /* --shadow-sm / --shadow-md / --shadow-accent kept — same names */
+  --radius-card:   var(--radius-lg);
+  /* --radius-md / --radius-sm / --radius-pill kept — same names */
+  --ease:          var(--ease-standard);
+  --dur:           var(--dur-base);
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  display: flex;
+  flex-direction: column;   /* Top stage-bar + main row below */
+  font-family: var(--font-sans);
+  color: var(--text);
+  /* Subtle accent radial at top + base canvas. The radial gives the
+     "tech glow" without overpowering. color-mix keeps it tied to
+     the accent token, so dark mode (which uses a brighter accent)
+     gets a proportionally stronger glow. */
+  background:
+    radial-gradient(ellipse 80% 50% at 50% -20%,
+      color-mix(in srgb, var(--accent) 8%, transparent) 0%,
+      transparent 70%),
+    var(--bg-canvas);
+  background-attachment: fixed;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+[data-theme="dark"] body {
+  /* Dark mode gets a slightly stronger glow so black isn't flat. */
+  background:
+    radial-gradient(ellipse 80% 50% at 50% -20%,
+      color-mix(in srgb, var(--accent) 12%, transparent) 0%,
+      transparent 70%),
+    var(--bg-canvas);
+  background-attachment: fixed;
+}
+
+/* ============ Floating theme toggle (always visible, top-right) ============ */
+#theme-toggle {
+  position: fixed;
+  top: 14px;
+  right: 16px;
+  z-index: 100;
+  /* Above stage-bar and config card */
+}
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  background: var(--bg-overlay);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
+  cursor: pointer;
+  box-shadow: var(--shadow-xs);
+  transition: background var(--dur-fast) var(--ease-standard),
+              color var(--dur-fast) var(--ease-standard),
+              border-color var(--dur-fast) var(--ease-standard),
+              transform var(--dur-fast) var(--ease-spring);
+}
+.icon-btn:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent-ring);
+}
+.icon-btn:active {
+  transform: scale(0.94);
+}
+.icon-btn:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+/* Sun shows in light mode, moon shows in dark mode. Default (no
+   data-theme attribute) = light. */
+#theme-toggle .icon-moon { display: none; }
+[data-theme="dark"] #theme-toggle .icon-sun { display: none; }
+[data-theme="dark"] #theme-toggle .icon-moon { display: block; }
+
+/* ============ Top stage bar (replaces PPT menu bar) ============ */
+#stage-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  padding: 10px 16px;
+  background: var(--bg-overlay);   /* translucent — picks up body's accent glow */
+  border-bottom: 1px solid var(--border-subtle);
+  gap: 16px;
+  /* Reserve space for the floating theme toggle so the action buttons
+     don't slide under it. */
+  padding-right: 60px;
+}
+#stage-list {
+  display: flex;
+  gap: 4px;
+  flex: 1;
+  overflow-x: auto;
+}
+.stage-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
+  font-size: 13px;
+  cursor: default;
+  transition: background var(--dur-fast) var(--ease-standard),
+              color var(--dur-fast) var(--ease-standard);
+  white-space: nowrap;
+  user-select: none;
+  color: var(--text-secondary);
+}
+.stage-tab .icon {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-disabled);
+}
+.stage-tab.pending { color: var(--text-tertiary); }
+.stage-tab.pending .icon { background: var(--text-disabled); }
+.stage-tab.running {
+  /* Stronger highlight: 28% opacity (up from 10%) + bold + bottom accent
+     edge so the running tab is immediately obvious against the
+     pending/completed siblings. */
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  color: var(--accent);
+  font-weight: 600;
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.stage-tab.running .icon {
+  background: var(--accent);
+  /* Larger pulse dot — 10px vs the default 8px — so the running tab's
+     animation is visible at a glance. */
+  width: 10px;
+  height: 10px;
+  animation: pulse-accent 1.6s var(--ease-standard) infinite;
+}
+.stage-tab.completed {
+  background: var(--success-soft);
+  color: var(--success);
+  cursor: pointer;          /* completed stages are clickable (回看) */
+}
+.stage-tab.completed:hover { background: color-mix(in srgb, var(--success) 18%, transparent); }
+.stage-tab.completed .icon { background: var(--success); }
+.stage-tab.active {
+  box-shadow: 0 0 0 2px var(--accent-ring);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.stage-tab.cancelled {
+  background: var(--error-soft);
+  color: var(--error);
+}
+.stage-tab.cancelled .icon { background: var(--error); }
+@keyframes pulse-accent {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.4; transform: scale(0.7); }
+}
+#actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+button {
+  padding: 8px 16px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  transition: transform var(--dur-fast) var(--ease-spring),
+              background var(--dur-fast) var(--ease-standard),
+              box-shadow var(--dur-fast) var(--ease-standard),
+              border-color var(--dur-fast) var(--ease-standard);
+}
+button:active:not(:disabled) {
+  /* Spring bounce — slight overshoot via cubic-bezier(0.34, 1.56, 0.64, 1). */
+  transform: scale(0.97);
+}
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+#approve-btn {
+  background: linear-gradient(180deg, var(--accent) 0%, var(--accent-active) 100%);
+  color: white;
+  box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255,255,255,0.18);
+}
+#approve-btn:hover:not(:disabled) {
+  background: linear-gradient(180deg, var(--accent-hover) 0%, var(--accent-active) 100%);
+  box-shadow: var(--shadow-accent), inset 0 1px 0 rgba(255,255,255,0.22);
+}
+/* Home button: subtle gray so it doesn't compete with Approve/Cancel.
+   Always enabled — user can bail out from any pipeline state.
+   Amber warning glyph flags that clicking interrupts the running
+   stage; tooltip on the button explains the resume semantics. */
+#home-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border-color: var(--border-default);
+}
+#home-btn:hover {
+  background: var(--bg-overlay);
+  border-color: var(--border-strong);
+}
+#home-btn .warn-icon {
+  color: var(--warn);
+  flex-shrink: 0;
+}
+
+/* ============ Main row: thumbnails | preview | chat ============ */
+main {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+/* ============ Left: thumbnails column ============ */
+#thumbnails {
+  width: 220px;
+  flex-shrink: 0;
+  background: var(--bg-elevated);
+  border-right: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#thumbnails h3, #preview h3, #chat h3 {
+  margin: 0;
+  padding: 14px 16px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-tertiary);
+}
+#thumb-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.thumb {
+  padding: 10px;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  box-shadow: var(--shadow-xs);
+  transition: transform var(--dur-base) var(--ease-spring),
+              box-shadow var(--dur-base) var(--ease-standard),
+              border-color var(--dur-base) var(--ease-standard);
+}
+.thumb:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+  border-color: var(--border-strong);
+}
+.thumb.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring), var(--shadow-sm);
+}
+.thumb-label {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  margin-bottom: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+}
+.thumb-body {
+  font-size: 12px;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+/* Slide thumbnail: 160x90 (16:9) iframe scaled from 1280x720 */
+.thumb-slide {
+  width: 100%;
+  aspect-ratio: 16/9;
+  overflow: hidden;
+  position: relative;
+  border-radius: var(--radius-xs);
+  background: white;
+  border: 1px solid var(--border-subtle);
+}
+.thumb-slide iframe {
+  width: 1280px;
+  height: 720px;
+  transform: scale(0.125);   /* 160 / 1280 = 0.125 (matches thumb inner width) */
+  transform-origin: top left;
+  border: 0;
+  pointer-events: none;
+  margin: 0;
+}
+.thumb-image {
+  width: 100%;
+  aspect-ratio: 16/9;
+  object-fit: contain;
+  background: var(--bg-canvas);
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border-subtle);
+}
+.thumb-svg {
+  width: 100%;
+  aspect-ratio: 16/9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-canvas);
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+}
+.thumb-svg svg { max-width: 100%; max-height: 100%; }
+
+/* ============ Middle: preview column ============ */
+#preview {
+  flex: 1;
+  background: var(--bg-canvas);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#status-banner {
+  padding: 8px 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  margin: 0 16px 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+#status-banner.error {
+  background: var(--error-soft);
+  border-color: color-mix(in srgb, var(--error) 30%, transparent);
+  color: var(--error);
+}
+#status-banner.done {
+  background: var(--success-soft);
+  border-color: color-mix(in srgb, var(--success) 30%, transparent);
+  color: var(--success);
+}
+
+/* ===================================================================== */
+/* Progress strip — replaces the static #status-banner in #preview.       */
+/* Prominent stage indicator with animated bar. States control colour +   */
+/* animation:                                                            */
+/*   .state-idle       — pre-pipeline, dim text, empty bar                */
+/*   .state-running    — accent border + ring, pulsing icon, fill bar     */
+/*   .state-message    — review-gate pause / status text, bar frozen      */
+/*   .state-done       — success colour, bar full                         */
+/*   .state-error      — error colour (see below)                         */
+/*   .indeterminate    — modifier on running: atomic stage, flowing       */
+/*                       stripe animation instead of fill width           */
+/* ===================================================================== */
+#progress-strip {
+  margin: 0 16px 8px;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  transition: border-color var(--dur-fast) var(--ease-standard),
+              box-shadow var(--dur-fast) var(--ease-standard),
+              background var(--dur-fast) var(--ease-standard);
+}
+#progress-strip.state-running {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-ring);
+}
+#progress-strip.state-done {
+  border-color: color-mix(in srgb, var(--success) 50%, transparent);
+  background: var(--success-soft);
+}
+#progress-strip.state-error {
+  border-color: color-mix(in srgb, var(--error) 50%, transparent);
+  background: var(--error-soft);
+}
+.progress-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  min-height: 18px;
+}
+.progress-stage-icon {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-disabled);
+  flex-shrink: 0;
+}
+#progress-strip.state-running .progress-stage-icon {
+  background: var(--accent);
+  animation: pulse-accent 1.6s var(--ease-standard) infinite;
+}
+#progress-strip.state-done .progress-stage-icon { background: var(--success); }
+#progress-strip.state-error .progress-stage-icon { background: var(--error); }
+.progress-stage-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  flex-shrink: 0;
+}
+#progress-strip.state-running .progress-stage-name { color: var(--accent); }
+#progress-strip.state-done .progress-stage-name { color: var(--success); }
+#progress-strip.state-error .progress-stage-name { color: var(--error); }
+.progress-stats {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+  white-space: nowrap;
+}
+.progress-eta {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.progress-bar-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-canvas);
+  overflow: hidden;
+}
+.progress-bar-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--accent) 0%, var(--accent-hover) 100%);
+  transition: width 400ms var(--ease-out),
+              background var(--dur-fast) var(--ease-standard);
+}
+#progress-strip.state-done .progress-bar-fill {
+  width: 100%;
+  background: var(--success);
+  transition: width 400ms var(--ease-out),
+              background var(--dur-fast) var(--ease-standard);
+}
+/* Indeterminate — atomic stages (theme, rendered). Full-width bar with a
+   flowing accent stripe instead of a width-tied fill. The width transition
+   is disabled so the JS doesn't fight the keyframe animation. */
+#progress-strip.indeterminate .progress-bar-fill {
+  width: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--accent-soft) 25%,
+    var(--accent) 50%,
+    var(--accent-soft) 75%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: progress-flow 1.8s var(--ease-standard) infinite;
+  transition: none;
+}
+@keyframes progress-flow {
+  0%   { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+#preview-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  margin: 0 16px 16px;
+}
+#preview-content pre {
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-subtle);
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+#preview-content h4 {
+  margin: 0 0 12px 0;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+/* Big-slide wrapper: outer div takes the responsive 16:9 box, inner
+   iframe is fixed at 1280x720 (the slide's native canvas) and scaled
+   via JS to fit. Mirrors .thumb-slide's approach — without this, the
+   iframe viewport (e.g. 800x450) is smaller than the .ppt-slide inside
+   (1280x720), producing scrollbars / clipped content. */
+#preview-content .big-slide-wrapper {
+  width: 100%;
+  aspect-ratio: 16/9;
+  overflow: hidden;
+  position: relative;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: white;
+}
+#preview-content .big-slide-wrapper iframe {
+  width: 1280px;
+  height: 720px;
+  transform-origin: top left;
+  border: 0;
+  margin: 0;
+  display: block;
+}
+#done-banner {
+  margin: 0 16px 16px;
+  padding: 14px 16px;
+  background: var(--success-soft);
+  border: 1px solid color-mix(in srgb, var(--success) 30%, transparent);
+  border-radius: var(--radius-sm);
+  color: var(--success);
+}
+#done-banner ul { margin: 8px 0 0 0; padding-left: 20px; }
+
+/* ============ Right: chat column (PR3 placeholder, unchanged) ============ */
+#chat {
+  width: 320px;
+  flex-shrink: 0;
+  background: var(--bg-elevated);
+  border-left: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+}
+#chat .placeholder {
+  color: var(--text-tertiary);
+  font-style: italic;
+  padding: 24px 16px;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* ============ Screen switching (config ↔ pipeline) ============ */
+/* Two top-level sections in <body>; only one is visible at a time,
+   driven by the pipeline_state WS message + /api/status on load. */
+#config-screen, #pipeline-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#pipeline-screen { display: flex; }
+#config-screen { display: flex; overflow-y: auto; }
+body.pipeline-active #config-screen { display: none; }
+body.pipeline-active #pipeline-screen { display: flex; }
+body.config-active #pipeline-screen { display: none; }
+body.config-active #config-screen { display: flex; }
+
+/* ============ Config screen ============ */
+#config-screen {
+  background: var(--bg);
+  padding: 48px 24px 64px;
+  align-items: center;
+}
+.config-container {
+  width: 100%;
+  max-width: 720px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: 36px 40px;
+  box-shadow: var(--shadow-md);
+}
+/* Brand header — replaces plain h1+subtitle with a small lockup. */
+.app-header { margin-bottom: 28px; }
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.brand-mark {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, var(--accent) 0%, #8b5cf6 100%);
+  color: #fff;
+  border-radius: 11px;
+  font-size: 20px;
+  font-weight: 700;
+  box-shadow: var(--shadow-accent);
+  flex-shrink: 0;
+}
+.brand-name {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.brand-tagline {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+.brand-tagline code {
+  background: var(--bg-subtle);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+.config-container fieldset {
+  border: none;
+  padding: 0;
+  margin: 0 0 22px;
+}
+.config-container legend {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  padding: 0;
+  margin-bottom: 12px;
+}
+.config-container label {
+  display: block;
+  margin: 14px 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+.config-container label > input,
+.config-container label > textarea,
+.config-container label > select {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 0 12px;
+  height: 40px;
+  font-size: 14px;
+  font-weight: 400;
+  font-family: inherit;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--bg-canvas);
+  color: var(--text-primary);
+  transition: border-color var(--dur-fast) var(--ease-standard),
+              box-shadow var(--dur-fast) var(--ease-standard);
+}
+.config-container label > textarea {
+  height: auto;
+  min-height: 96px;
+  padding: 10px 12px;
+  line-height: 1.5;
+  resize: vertical;
+}
+.config-container label > input:focus,
+.config-container label > textarea:focus,
+.config-container label > select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+.config-container label > input::placeholder,
+.config-container label > textarea::placeholder {
+  color: var(--text-tertiary);
+}
+.config-container label.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 400;
+}
+.config-container label.checkbox input {
+  width: auto;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.config-container details {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: var(--radius-md);
+  padding: 0;
+  margin-bottom: 22px;
+  overflow: hidden;
+}
+.config-container details[open] { padding-bottom: 4px; }
+.config-container summary {
+  cursor: pointer;
+  padding: 12px 16px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  user-select: none;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: color var(--dur) var(--ease);
+}
+.config-container summary:hover { color: var(--text); }
+.config-container summary::-webkit-details-marker { display: none; }
+.config-container summary::before {
+  content: '▸';
+  font-size: 10px;
+  color: var(--text-subtle);
+  transition: transform var(--dur) var(--ease);
+}
+.config-container details[open] > summary::before {
+  transform: rotate(90deg);
+}
+.config-container details[open] > summary {
+  border-bottom: 1px solid var(--border);
+}
+.config-container details > label,
+.config-container details > .checkbox {
+  margin: 14px 16px 0;
+  display: block;
+}
+.config-container details > label:last-child { margin-bottom: 14px; }
+.config-error {
+  background: var(--error-soft);
+  color: var(--error);
+  border: 1px solid color-mix(in srgb, var(--error) 30%, transparent);
+  border-radius: var(--radius-sm);
+  padding: 11px 14px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+/* Recent runs section — appears at top of config form. Lets the
+   user pick a previous run and load its state, skipping all LLM
+   calls and re-emitting cached snapshots to the review UI. */
+.recent-runs-section {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  margin-bottom: 22px;
+  background: var(--bg);
+}
+.recent-runs-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.recent-runs-header h3 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+.small-btn {
+  padding: 4px 10px;
+  background: var(--card);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+  font-family: inherit;
+  transition: all var(--dur) var(--ease);
+}
+.small-btn:hover {
+  background: var(--bg-subtle);
+  border-color: var(--text-subtle);
+}
+.recent-runs-empty {
+  padding: 6px 0;
+  color: var(--text-subtle);
+  font-size: 12px;
+}
+.run-card {
+  padding: 12px 14px;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  margin-top: 8px;
+  cursor: pointer;
+  transition: transform var(--dur-base) var(--ease-spring),
+              border-color var(--dur-base) var(--ease-standard),
+              background var(--dur-base) var(--ease-standard),
+              box-shadow var(--dur-base) var(--ease-standard);
+}
+.run-card:hover {
+  border-color: var(--accent-ring);
+  background: var(--accent-soft);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+.run-card.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+.run-card-row1 {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 13px;
+}
+.run-card-timestamp {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.run-card-topic {
+  flex: 1;
+  color: var(--text);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.run-card-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+.run-card-meta .badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  margin-right: 6px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+.run-card-meta .badge.done { background: var(--success-bg); color: var(--success); }
+.run-card-meta .badge.partial { background: var(--warn-bg); color: var(--warn); }
+#start-btn {
+  width: 100%;
+  padding: 13px 22px;
+  background: linear-gradient(180deg, var(--accent) 0%, var(--accent-active) 100%);
+  color: white;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: transform var(--dur-fast) var(--ease-spring),
+              background var(--dur-fast) var(--ease-standard),
+              box-shadow var(--dur-fast) var(--ease-standard);
+  box-shadow: var(--shadow-accent), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  margin-top: 4px;
+}
+#start-btn:hover:not(:disabled) {
+  background: linear-gradient(180deg, var(--accent-hover) 0%, var(--accent-active) 100%);
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 40%, transparent),
+              inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  transform: translateY(-1px);
+}
+#start-btn:active:not(:disabled) {
+  transform: scale(0.98);
+  box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+#start-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+/* Topic input tabs — Apple-style segmented control.
+   Single pill container, inactive items transparent, active item
+   gets a "raised" surface via bg-canvas + shadow-xs. */
+.topic-tabs {
+  display: inline-flex;
+  padding: 3px;
+  margin-top: 6px;
+  margin-bottom: 0;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-pill);
+  gap: 2px;
+}
+.topic-tab {
+  padding: 6px 14px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-family: inherit;
+  transition: background var(--dur-fast) var(--ease-standard),
+              color var(--dur-fast) var(--ease-standard),
+              box-shadow var(--dur-fast) var(--ease-standard);
+}
+.topic-tab:hover { color: var(--text-primary); }
+.topic-tab.active {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-xs);
+}
+.topic-tab-body {
+  display: none;
+  padding: 14px 0 4px;
+}
+.topic-tab-body.active { display: block; }
+.topic-tab-body input[type="file"] {
+  display: block;
+  width: 100%;
+  padding: 8px 0;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text-secondary);
+}
+.topic-tab-body .file-note {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-top: 6px;
+}
+
+/* ============ Locked credential fields (CLI / .env) ============ */
+/* Applied via JS to inputs whose values come from --api-base etc.
+   or SHUTTLESLIDE_* env vars. Readonly (not disabled) so the value
+   still submits with the form. For secret fields (api_key,
+   vlm_api_key) the value is a mask placeholder — the server never
+   returns the real value via /api/defaults, and re-injects it
+   server-side from effective_defaults at POST /api/start. */
+input.locked-field {
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  cursor: not-allowed;
+  border-color: var(--border);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+input.locked-field:focus {
+  outline: none;
+  border-color: var(--border);
+  box-shadow: none;
+}
+.credentials-locked-note {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-ring);
+  border-radius: var(--radius-sm);
+  padding: 12px 16px;
+  margin: 0 0 18px;
+  font-size: 13px;
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.credentials-locked-note strong { font-weight: 600; }
+.credentials-locked-note code {
+  background: var(--bg-canvas);
+  padding: 2px 7px;
+  border-radius: var(--radius-xs);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--accent);
+}
+
+/* ============ Log drawer (Phase 8) ============
+   Collapsible bottom drawer inside #preview. Shows per-stage WS
+   events and PPTX render progress. Collapsed by default; click the
+   header to expand. Auto-expands when a pptx render starts (app.js
+   downloadPptx) so the user sees the progress log without searching.
+   No backdrop-filter — depth comes from border + shadow. */
+#log-drawer {
+  margin-top: var(--space-4);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  flex-shrink: 0;            /* don't let flexbox crush the drawer */
+  transition: height var(--dur-base) var(--ease-standard),
+              border-color var(--dur-fast) var(--ease-standard);
+}
+#log-drawer.collapsed { height: 36px; }
+#log-drawer.expanded { height: 240px; }
+
+#log-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 36px;
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid transparent;
+  transition: border-color var(--dur-fast) var(--ease-standard);
+}
+#log-drawer.expanded #log-drawer-header {
+  border-bottom-color: var(--border-subtle);
+}
+
+#log-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font: 500 12px/1 var(--font-sans);
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+#log-toggle:hover { color: var(--text-primary); }
+#log-toggle .log-caret {
+  display: inline-block;
+  width: 10px;
+  text-align: center;
+  transition: transform var(--dur-fast) var(--ease-standard);
+}
+#log-drawer.expanded #log-toggle .log-caret { transform: rotate(90deg); }
+#log-toggle .log-count {
+  display: inline-block;
+  min-width: 18px;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+  text-align: center;
+  letter-spacing: 0;
+}
+
+.log-clear-btn {
+  padding: 2px 8px;
+  background: transparent;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font: 400 11px/1 var(--font-sans);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-standard),
+              border-color var(--dur-fast) var(--ease-standard);
+}
+.log-clear-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+
+#log-list {
+  height: calc(100% - 36px);
+  overflow-y: auto;
+  padding: var(--space-2) var(--space-3);
+  font: 400 12px/1.5 var(--font-mono);
+  color: var(--text-secondary);
+  scrollbar-width: thin;
+}
+#log-drawer.collapsed #log-list { display: none; }
+
+/* Each log entry: [time] [scope] message */
+.log-entry {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: var(--space-2);
+  padding: 2px 0;
+  border-bottom: 1px solid var(--border-subtle);
+  word-break: break-word;
+}
+.log-entry:last-child { border-bottom: none; }
+.log-entry .log-time {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.log-entry .log-scope {
+  padding: 0 6px;
+  border-radius: var(--radius-xs);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+  align-self: center;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+}
+.log-entry.log-level-warn  .log-scope { background: var(--warn-soft);    color: var(--warn); }
+.log-entry.log-level-error .log-scope { background: var(--error-soft);   color: var(--error); }
+.log-entry.log-level-ok    .log-scope { background: var(--success-soft); color: var(--success); }
+.log-entry.log-level-error .log-msg { color: var(--error); }
+.log-entry.log-level-ok    .log-msg { color: var(--success); }
+
+/* ===================================================================== */
+/* Resume mode — entered when a recent run card is selected.              */
+/* Form task-fields go disabled + visually sunken, the resume banner      */
+/* appears at the top of the form, and the action row swaps to            */
+/* [Cancel selection] + [Resume run →].                                  */
+/* ===================================================================== */
+.resume-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: var(--text);
+}
+.resume-banner-icon {
+  color: var(--accent);
+  font-size: 12px;
+  line-height: 1.4;
+  flex-shrink: 0;
+}
+.resume-banner-body { line-height: 1.45; }
+.resume-banner-body code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  background: var(--bg-canvas);
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--border-default);
+  word-break: break-all;
+}
+
+.form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 8px;
+}
+.form-actions #cancel-selection-btn[hidden] { display: none; }
+
+/* Resume mode: lock the task-scope fields visually. We also set
+   ``.disabled`` via JS so the field stops submitting entirely. */
+#config-screen.resume-mode input:disabled,
+#config-screen.resume-mode textarea:disabled,
+#config-screen.resume-mode .topic-tab:disabled {
+  opacity: 0.55;
+  background: var(--bg-canvas);
+  cursor: not-allowed;
+}
+#config-screen.resume-mode .topic-tab:disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}

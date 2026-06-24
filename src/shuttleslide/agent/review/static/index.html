@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Shuttleslide Studio</title>
+  <!-- Set theme before CSS loads so the first paint matches user preference.
+       Inline + synchronous on purpose — any delay causes a flash of the
+       wrong theme. Reads localStorage["shuttleslide:theme"], falls back
+       to prefers-color-scheme. -->
+  <script>
+    (function () {
+      var saved = localStorage.getItem("shuttleslide:theme");
+      var prefersDark = window.matchMedia &&
+        window.matchMedia("(prefers-color-scheme: dark)").matches;
+      document.documentElement.dataset.theme =
+        saved || (prefersDark ? "dark" : "light");
+    })();
+  </script>
+  <!-- Pin marked version so CDN drift doesn't break the UI. -->
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
+  <link rel="stylesheet" href="/styles.css?v=phase15" />
+</head>
+<body class="config-active">
+  <!-- Floating theme toggle — always visible, top-right. Fixed position
+       so it stays put across config ↔ pipeline screen switches. -->
+  <button id="theme-toggle" class="icon-btn" aria-label="Toggle theme" title="Toggle theme">
+    <svg class="icon-sun" width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <circle cx="8" cy="8" r="3.5" stroke="currentColor" stroke-width="1.4"/>
+      <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.4 1.4M11.55 11.55l1.4 1.4M3.05 12.95l1.4-1.4M11.55 4.45l1.4-1.4"
+            stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+    </svg>
+    <svg class="icon-moon" width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <path d="M13 9.2A5 5 0 1 1 6.8 3a4 4 0 0 0 6.2 6.2z"
+            stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+    </svg>
+  </button>
+
+  <!-- ============ CONFIG SCREEN — first screen the user sees. ============ -->
+  <section id="config-screen">
+    <div class="config-container">
+      <header class="app-header">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">◆</div>
+          <div>
+            <h1 class="brand-name">Shuttleslide Studio</h1>
+            <p class="brand-tagline">
+              Configure the agent pipeline, then review each stage in-browser.
+              Use <code>slidecraft generate</code> for the no-review CLI path.
+            </p>
+          </div>
+        </div>
+      </header>
+
+      <form id="config-form">
+        <div id="config-error" class="config-error" style="display:none;"></div>
+
+        <!-- Resume banner — shown only when a recent run is selected.
+             The form below becomes read-only; server uses the saved
+             state from disk, ignoring any pre-filled values. -->
+        <div id="resume-banner" class="resume-banner" hidden>
+          <span class="resume-banner-icon" aria-hidden="true">▶</span>
+          <div class="resume-banner-body">
+            <strong>Resume mode.</strong>
+            Form fields are read-only. The pipeline will reuse the saved
+            state from <code id="resume-run-id"></code>.
+          </div>
+        </div>
+
+        <section class="recent-runs-section">
+          <div class="recent-runs-header">
+            <h3>Recent runs</h3>
+            <button type="button" id="refresh-runs-btn" class="small-btn">Refresh</button>
+          </div>
+          <div id="recent-runs-list">
+            <p class="recent-runs-empty" style="color:#999;font-size:12px;">Loading...</p>
+          </div>
+        </section>
+
+        <fieldset>
+          <legend>Required</legend>
+          <label>API base URL
+            <input type="text" name="api_base"
+                   placeholder="https://api.deepseek.com"
+                   data-persist="local" required />
+          </label>
+          <label>API key
+            <input type="password" name="api_key"
+                   placeholder="sk-..."
+                   data-persist="session" required />
+          </label>
+          <label>Model
+            <input type="text" name="model"
+                   placeholder="deepseek-chat"
+                   data-persist="local" required />
+          </label>
+          <label>Topic / source content
+            <div class="topic-tabs" role="tablist">
+              <button type="button" class="topic-tab active" data-topic-mode="text">Direct text</button>
+              <button type="button" class="topic-tab" data-topic-mode="html">HTML file</button>
+              <button type="button" class="topic-tab" data-topic-mode="textfile">MD / TXT file</button>
+            </div>
+            <div class="topic-tab-body active" data-topic-mode="text">
+              <textarea name="topic" placeholder="What's the presentation about?"></textarea>
+            </div>
+            <div class="topic-tab-body" data-topic-mode="html">
+              <input type="file" name="html_file" accept=".html,.htm" />
+              <div class="file-note">Boilerplate stripped via trafilatura; main content extracted as Markdown.</div>
+            </div>
+            <div class="topic-tab-body" data-topic-mode="textfile">
+              <input type="file" name="text_file" accept=".md,.txt" />
+              <div class="file-note">Used verbatim — the file is the topic body.</div>
+            </div>
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Style</legend>
+          <label>Style hint
+            <input type="text" name="style_hint"
+                   placeholder="business / cute / tech / editorial / ..."
+                   data-persist="local" />
+          </label>
+          <label>Target slide count
+            <input type="number" name="target_slide_count"
+                   placeholder="(LLM infers)"
+                   min="1" max="100"
+                   data-persist="local" />
+          </label>
+        </fieldset>
+
+        <details>
+          <summary>Advanced</summary>
+          <label>Temperature
+            <input type="number" name="temperature" step="0.1" value="0.7" min="0" max="2"
+                   data-persist="local" />
+          </label>
+          <label>VLM API base URL
+            <input type="text" name="vlm_api_base" placeholder="(same as main API if unset)"
+                   data-persist="local" />
+          </label>
+          <label>VLM API key
+            <input type="password" name="vlm_api_key" placeholder="(same as main API if unset)"
+                   data-persist="session" />
+          </label>
+          <label>VLM model
+            <input type="text" name="vlm_model" placeholder="gpt-4o, glm-4v, ..."
+                   data-persist="local" />
+          </label>
+          <label>Image search provider
+            <select name="image_search_provider" data-persist="local">
+              <option value="">(none)</option>
+              <option value="bing_web">bing_web</option>
+              <option value="stub">stub (no network)</option>
+            </select>
+          </label>
+          <label class="checkbox">
+            <input type="checkbox" name="disable_required_tool_choice"
+                   data-persist="local" />
+            Disable required tool choice
+          </label>
+        </details>
+
+        <div class="form-actions">
+          <button type="button" id="cancel-selection-btn" class="small-btn" hidden>✕ Cancel selection</button>
+          <button type="submit" id="start-btn">Start pipeline</button>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <!-- ============ PIPELINE SCREEN — wraps the existing stage-bar + main. ============ -->
+  <section id="pipeline-screen">
+    <header id="stage-bar">
+      <div id="stage-list"></div>
+      <div id="actions">
+        <button id="home-btn" class="home-btn-warn" title="Interrupts the running stage — re-loading this run re-runs it from scratch">
+          <svg class="warn-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M8 1.8l6.2 11.4H1.8L8 1.8z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+            <path d="M8 6.2v3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+            <circle cx="8" cy="11" r="0.8" fill="currentColor"/>
+          </svg>
+          <span class="home-label">Home</span>
+        </button>
+        <button id="approve-btn" disabled>Approve</button>
+      </div>
+    </header>
+
+  <main>
+    <aside id="thumbnails">
+      <h3 id="thumb-title">Thumbnails</h3>
+      <div id="thumb-list">
+        <p style="color:#999;font-size:12px;padding:8px;">No stage output yet.</p>
+      </div>
+    </aside>
+
+    <section id="preview">
+      <h3>Preview</h3>
+      <div id="progress-strip" class="state-idle">
+        <div class="progress-header">
+          <span class="progress-stage-icon" aria-hidden="true"></span>
+          <span class="progress-stage-name">Waiting for pipeline to start...</span>
+          <span class="progress-stats"></span>
+          <span class="progress-eta"></span>
+        </div>
+        <div class="progress-bar-track" aria-hidden="true">
+          <div class="progress-bar-fill"></div>
+        </div>
+      </div>
+      <div id="preview-content">
+        <p style="color: #999;">No stage output yet.</p>
+      </div>
+      <div id="done-banner" style="display:none;"></div>
+
+      <!-- Collapsible log drawer — docks to bottom of #preview.
+           Collapsed by default; expands on click or when a 'pptx'
+           render starts (see appendLog / downloadPptx in app.js).
+           Entries are appended via appendLog(); LOG_CAP trims from top. -->
+      <div id="log-drawer" class="collapsed">
+        <div id="log-drawer-header">
+          <button type="button" id="log-toggle"
+                  aria-expanded="false" aria-controls="log-list">
+            <span class="log-caret">&#9656;</span>
+            <span class="log-title">Logs</span>
+            <span id="log-count" class="log-count">0</span>
+          </button>
+          <button type="button" id="log-clear" class="log-clear-btn" title="Clear logs">Clear</button>
+        </div>
+        <div id="log-list" role="log" aria-live="polite" aria-atomic="false"></div>
+      </div>
+    </section>
+
+    <aside id="chat">
+      <h3>Chat</h3>
+      <p class="placeholder">
+        Element editing arrives in PR3.<br /><br />
+        For now you can Approve each stage (Export on the final stage).
+      </p>
+    </aside>
+  </main>
+  </section> <!-- /pipeline-screen -->
+
+  <script src="/app.js?v=phase15" defer></script>
+</body>
+</html>

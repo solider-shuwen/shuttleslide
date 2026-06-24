@@ -25,14 +25,25 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
-# Canonical stage names emitted by orchestrator._post_stage_hook. Keeping
-# this as a tuple (not a free-form string) lets the CLI flag
-# ``--review-stages`` validate user input and lets reviewers iterate a
-# fixed list.
+# Core stage names — the 5 built-in stages shipped with shuttleslide.
+# This tuple stays static for CLI flag validation (``--review-stages``
+# defaults to this set). For the *current* resolved pipeline order
+# (which may include pro extension stages), use
+# ``StageRegistry.all_names()`` instead.
 STAGE_NAMES = ("theme", "outline", "images", "slides", "rendered")
-StageName = Literal["theme", "outline", "images", "slides", "rendered"]
+# ``StageName`` is the runtime type used everywhere a stage name flows
+# through the system (snapshots, gate, broadcaster, persistence). It's
+# ``str`` rather than a Literal so extension stages (script / voiceover
+# / etc.) are representable without editing this file every time one is
+# added.
+StageName = str
+# ``CoreStageName`` is the Literal narrow type for code that only ever
+# deals with the 5 built-ins (e.g. type-narrowing inside core_stages).
+# Use this when you want mypy / pyright to catch a typo in core-stage
+# dispatch code.
+CoreStageName = Literal["theme", "outline", "images", "slides", "rendered"]
 ReviewAction = Literal["approve", "cancel"]
 
 

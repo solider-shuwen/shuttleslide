@@ -493,5 +493,189 @@ def warm_cache(force: bool, include_google_fonts: bool):
         sys.exit(1)
 
 
+@main.command()
+@click.option("--host", default="127.0.0.1", show_default=True,
+              help="Bind address for the review web server.")
+@click.option("--port", default=8765, show_default=True, type=int,
+              help="Port for the review web server.")
+@click.option("-o", "--output-dir", "output_dir", type=click.Path(),
+              default=None,
+              help="Base directory for runs. Each run creates a timestamped "
+                   "subdirectory. Defaults to ./tmp/web_review/.")
+@click.option("--no-browser", is_flag=True,
+              help="Don't auto-open the browser (still prints the URL).")
+@click.option("--api-base", default=None,
+              help="Lock API base URL. Overrides .env / form; field becomes read-only in UI.")
+@click.option("--api-key", default=None,
+              help="Lock API key (read-only in UI).")
+@click.option("--model", default=None,
+              help="Lock model name (read-only in UI).")
+@click.option("--vlm-api-base", default=None,
+              help="Lock VLM API base URL (read-only in UI).")
+@click.option("--vlm-api-key", default=None,
+              help="Lock VLM API key (read-only in UI).")
+@click.option("--vlm-model", default=None,
+              help="Lock VLM model name (read-only in UI).")
+@click.option("--mock", "mock_mode", is_flag=True,
+              help="Mock mode: bypass real LLM/VLM calls. The pipeline uses "
+                   "a stub orchestrator that fires synthetic progress events "
+                   "and populates canned state. Fast end-to-end UI testing "
+                   "without API credentials. Locks all credential fields "
+                   "(hidden in the form).")
+def review(
+    host: str,
+    port: int,
+    output_dir: Optional[str],
+    no_browser: bool,
+    api_base: Optional[str],
+    api_key: Optional[str],
+    model: Optional[str],
+    vlm_api_base: Optional[str],
+    vlm_api_key: Optional[str],
+    vlm_model: Optional[str],
+    mock_mode: bool,
+):
+    """Launch the web review client.
+
+    Opens a browser to a configuration page where you set API
+    credentials, topic, and style. The pipeline runs with
+    human-in-the-loop stage approval — review each stage's snapshot,
+    request edits, then approve to proceed.
+
+    Use `slidecraft generate` instead for the no-review CLI path that
+    runs end-to-end without human intervention.
+
+    \b
+    Credential sources (later wins):
+      1. Web form (user types at runtime)
+      2. .env file in CWD using SHUTTLESLIDE_* keys (pre-fills + locks)
+      3. CLI flags below (lock specific fields, override .env)
+
+    When api_base + api_key + model are all locked (CLI or .env), the
+    credentials section of the form is hidden and only the model name
+    is shown.
+
+    \b
+    Examples:
+      slidecraft review
+      slidecraft review --port 9000 --no-browser
+      slidecraft review -o tmp/my_review_runs/
+      slidecraft review --api-base $URL --api-key $KEY --model glm-4.7
+      slidecraft review --vlm-model glm-4v  # lock only VLM model
+    """
+    import os
+    import signal
+    import threading
+    import time
+    import webbrowser
+
+    from shuttleslide.agent.review.server import ReviewServer
+
+    # Load .env from CWD before reading os.environ. Silent no-op when
+    # python-dotenv isn't installed or .env doesn't exist — CLI flags
+    # still work in that case. Reuses SHUTTLESLIDE_* env var names so
+    # the same .env works for `review` and `generate` (AgentConfig.from_env).
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
+
+    # Map AgentConfig field names to their SHUTTLESLIDE_* env var.
+    _ENV_MAP = {
+        "api_base": "SHUTTLESLIDE_API_BASE",
+        "api_key": "SHUTTLESLIDE_API_KEY",
+        "model": "SHUTTLESLIDE_MODEL",
+        "vlm_api_base": "SHUTTLESLIDE_VLM_API_BASE",
+        "vlm_api_key": "SHUTTLESLIDE_VLM_API_KEY",
+        "vlm_model": "SHUTTLESLIDE_VLM_MODEL",
+    }
+    env_defaults = {
+        field: os.environ[env_var]
+        for field, env_var in _ENV_MAP.items()
+        if os.environ.get(env_var)
+    }
+    cli_overrides = {
+        "api_base": api_base,
+        "api_key": api_key,
+        "model": model,
+        "vlm_api_base": vlm_api_base,
+        "vlm_api_key": vlm_api_key,
+        "vlm_model": vlm_model,
+    }
+    cli_overrides = {k: v for k, v in cli_overrides.items() if v is not None}
+
+    if output_dir is None:
+        output_dir = str(Path.cwd() / "tmp" / "web_review")
+    base_dir = Path(output_dir)
+    base_dir.mkdir(parents=True, exist_ok=True)
+
+    server = ReviewServer(
+        gate=None,              # created per-run inside _run_pipeline
+        orchestrator_loop=None,  # unused under new arch (pipeline runs on server loop)
+        host=host,
+        port=port,
+        output_dir=base_dir,
+        env_defaults=env_defaults,
+        cli_overrides=cli_overrides,
+        mock_mode=mock_mode,
+    )
+    server.start_in_thread()
+    click.echo(f"Review UI: {server.url}")
+    click.echo(f"Output base directory: {base_dir}")
+    if mock_mode:
+        click.echo("MOCK MODE: synthetic events, no real LLM calls.")
+    if env_defaults or cli_overrides:
+        # Surface which fields are locked so the user isn't surprised
+        # when the form greys them out.
+        locked = sorted(set(env_defaults) | set(cli_overrides))
+        click.echo(f"Locked credential fields: {', '.join(locked)}")
+    click.echo("Press Ctrl+C to stop.")
+
+    if not no_browser:
+        try:
+            webbrowser.open(server.url)
+        except Exception:
+            pass  # headless / no DE; user can open the URL manually
+
+    # Block the main thread until Ctrl+C / SIGTERM. The server runs on a
+    # daemon thread, so it dies automatically when we exit.
+    stop_event = threading.Event()
+
+    def _on_signal(signum, frame):
+        stop_event.set()
+
+    try:
+        signal.signal(signal.SIGINT, _on_signal)
+        # SIGTERM exists on Windows but isn't deliverable to Console apps;
+        # signal.signal would raise. Guarded for cross-platform safety.
+        if hasattr(signal, "SIGTERM") and platform_supports_sigterm():
+            signal.signal(signal.SIGTERM, _on_signal)
+    except (ValueError, OSError):
+        # ValueError when not on the main thread (shouldn't happen here);
+        # OSError when the signal isn't supported on this platform. In
+        # either case, fall back to KeyboardInterrupt below.
+        pass
+
+    try:
+        while not stop_event.is_set():
+            stop_event.wait(timeout=0.5)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        click.echo("Shutting down...")
+        try:
+            server.shutdown()
+        except Exception:
+            pass
+
+
+def platform_supports_sigterm() -> bool:
+    """True on Unix; on Windows SIGTERM exists as a name but is not
+    deliverable to console apps, so signal.signal would fail."""
+    import platform
+    return platform.system() != "Windows"
+
+
 if __name__ == "__main__":
     main()

@@ -45,6 +45,14 @@ dev = [
     "pytest-cov>=4.0.0",
     "black>=23.0.0",
     "mypy>=1.0.0",
+    "httpx>=0.24.0",
+    "httpx-ws>=0.5.0",
+]
+review = [
+    "fastapi>=0.100.0",
+    "uvicorn>=0.20.0",
+    "websockets>=11.0",
+    "python-dotenv>=1.0",
 ]
 
 [project.urls]
@@ -63,6 +71,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "shuttleslide.agent" = ["templates/*.html.j2", "templates/elements/*.html.j2"]
+"shuttleslide.agent.review" = ["static/*.html"]
 
 [tool.black]
 line-length = 100
