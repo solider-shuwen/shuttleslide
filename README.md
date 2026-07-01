@@ -163,9 +163,12 @@ slidecraft to-pptx slides.html -o output.pptx
 
 ```bash
 slidecraft generate "Introduction to Machine Learning" \
-    --api-base https://open.bigmodel.cn/api/paas/v4 \
-    --api-key $SHUTTLESLIDE_API_KEY \
-    --model glm-4.7 \
+    --api-base https://api.deepseek.com \
+    --api-key your-key-here \
+    --vlm-api-base https://open.bigmodel.cn/api/paas/v4 \
+    --vlm-api-key your-key-here \
+    --model deepseek-v4-flash \
+    --vlm-model glm-4.6v \
     -o tmp/gen/
 ```
 
