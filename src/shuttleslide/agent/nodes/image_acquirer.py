@@ -92,6 +92,28 @@ async def run_image_acquirer(
 
         source_type = spec.get("source_type", "svg")
 
+        if source_type == "user_upload":
+            # Pull from the user-staged library. The outline planner
+            # emitted source_ref = image_id; we resolve it to a concrete
+            # file and persist a slide-scoped copy (same path scheme as
+            # web uploads so the slide HTML and downstream consumers see
+            # the same image_file payload shape). On missing image_id we
+            # fall back to svg with a warning — mirrors the web fallback.
+            ok = _acquire_user_upload(
+                state=state,
+                slide_idx=slide_idx,
+                slot_id=slot_id,
+                spec=spec,
+                output_dir=output_dir,
+            )
+            if ok:
+                continue
+            state.add_warning(
+                f"image_acquirer slide {slide_idx + 1} slot {slot_id!r}: "
+                f"user_upload image_id not found in library, falling back to svg"
+            )
+            spec = {**spec, "source_type": "svg"}
+
         if source_type == "web":
             web_ok = await _try_acquire_web(
                 state=state,
@@ -198,7 +220,7 @@ async def _acquire_svg(
             tools=tool_schemas,
             temperature=temperature,
             max_tokens=effective_max_tokens,
-            tool_choice="required",
+            # tool_choice="required",
         )
         messages.append(response.assistant_message)
 
@@ -316,6 +338,124 @@ def _collect_specs(state: AgentState) -> List[tuple[int, str, Dict[str, Any]]]:
             spec_copy["_slide_total"] = total
             out.append((slide_idx, spec_copy["slot_id"], spec_copy))
     return out
+
+
+def _acquire_user_upload(
+    *,
+    state: AgentState,
+    slide_idx: int,
+    slot_id: str,
+    spec: Dict[str, Any],
+    output_dir: Optional[Any],
+) -> bool:
+    """Resolve a source_type='user_upload' spec from the staged library.
+
+    The outline planner emitted source_ref == image_id; we look it up
+    in ``state.user_image_library``, copy the staged file into the
+    slide-scoped images dir (same path scheme as web uploads so the
+    slide HTML and html_to_pptx see the same image_file shape), and
+    write the standard payload into ``state.slide_images``.
+
+    Returns True on success, False when:
+      - output_dir is None (no persistence target)
+      - the library is empty / image_id not found
+      - the staged file is missing on disk
+
+    Sync I/O is fine here — typical images are <1MB local copies, not
+    network fetches. Mirrors the payload shape emitted by the review
+    phase ImageUploader (image_uploader.py:246-269) so downstream code
+    sees one consistent shape regardless of when the upload happened.
+    """
+    if output_dir is None:
+        return False
+
+    image_id = spec.get("source_ref", "")
+    if not image_id:
+        return False
+
+    library = state.user_image_library or []
+    entry = next((e for e in library if e.get("image_id") == image_id), None)
+    if entry is None:
+        return False
+
+    src_path = entry.get("path", "")
+    if not src_path:
+        return False
+
+    # Resolve absolute path. The server writes either an absolute path
+    # (staging dir, pre-move) or a path relative to output_dir (post-
+    # move). Try both — whichever exists wins.
+    from pathlib import Path
+
+    src_p = Path(src_path)
+    if not src_p.is_absolute():
+        src_p = Path(output_dir) / src_path
+    if not src_p.exists():
+        state.add_warning(
+            f"image_acquirer slide {slide_idx + 1} slot {slot_id!r}: "
+            f"user_upload image_id {image_id!r} file missing at {src_p}"
+        )
+        return False
+
+    # Reuse the web path's persist helper to keep on-disk paths and
+    # image_file payload shape identical across svg/web/user_upload.
+    # Lazy import so environments without the image_sources subpackage
+    # (minimal test setups) still get the rest of the file.
+    try:
+        from shuttleslide.agent.nodes.image_sources.acquire import (
+            _persist_image_bytes,
+        )
+    except ImportError:
+        state.add_warning(
+            f"image_acquirer slide {slide_idx + 1} slot {slot_id!r}: "
+            f"image_sources subpackage unavailable for user_upload persist"
+        )
+        return False
+
+    image_bytes = src_p.read_bytes()
+    mime = entry.get("mime") or "image/jpeg"
+    rel_path = _persist_image_bytes(
+        image_bytes,
+        slide_idx=slide_idx,
+        slot_id=slot_id,
+        mime=mime,
+        output_dir=Path(output_dir),
+    )
+
+    # Read natural dimensions for the payload — best-effort via PIL,
+    # falls back to (0, 0) when Pillow isn't installed.
+    natural_w = 0
+    natural_h = 0
+    try:
+        from PIL import Image
+        import io as _io
+
+        with Image.open(_io.BytesIO(image_bytes)) as img:
+            natural_w, natural_h = img.size
+    except Exception:
+        pass
+
+    state.slide_images.setdefault(slide_idx, {})[slot_id] = {
+        "type": "image_file",
+        "path": rel_path,
+        "description": spec.get("description", "") or entry.get("description", ""),
+        "image_type": spec.get("image_type", "illustration"),
+        "width": natural_w,
+        "height": natural_h,
+        "mime": mime,
+        "meta": {
+            "source_type": "user_upload",
+            "source_ref": image_id,
+            "original_filename": entry.get("original_filename", ""),
+            # Same convention as review-phase uploads: VLM may have
+            # *described* the image but didn't *verify* it against a
+            # spec (the spec IS the description). Keep False so consumers
+            # branching on vlm_verified don't misclassify.
+            "vlm_verified": False,
+            "attempts": 1,
+        },
+    }
+    return True
 
 
 # Backward-compat alias. Existing callers that imported run_svg_generator

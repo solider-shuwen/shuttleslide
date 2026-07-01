@@ -1,0 +1,113 @@
+<svg viewBox="0 0 1024 768" xmlns="http://www.w3.org/2000/svg" id="metadata_diagram" data-slot="metadata_diagram">
+  <desc>A circular Venn-like diagram showing four intersecting metadata domains — Styles, Layout, Properties, Notes — converging at the center labeled 'Shuttleslide Round Trip'. Each domain quadrant has a distinct color (e.g., Styles in primary_color, Layout in accent_color, Properties in warm orange, Notes in cool teal) with representative icons (font 'A', slide grid, document tag, and speech bubble). Arrows loop clockwise around the diagram labeled 'PPTX' and 'HTML' to indicate bidirectional preservation.</desc>
+
+  <defs>
+    <marker id="arrowCW" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="10" markerHeight="10" orient="auto">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#8892B0"/>
+    </marker>
+
+    <radialGradient id="gradStyles" cx="45%" cy="45%" r="50%">
+      <stop offset="0%" stop-color="#2979FF" stop-opacity="0.30"/>
+      <stop offset="70%" stop-color="#2979FF" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#2979FF" stop-opacity="0.05"/>
+    </radialGradient>
+    <radialGradient id="gradLayout" cx="55%" cy="45%" r="50%">
+      <stop offset="0%" stop-color="#00E5FF" stop-opacity="0.30"/>
+      <stop offset="70%" stop-color="#00E5FF" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#00E5FF" stop-opacity="0.05"/>
+    </radialGradient>
+    <radialGradient id="gradProps" cx="45%" cy="55%" r="50%">
+      <stop offset="0%" stop-color="#FF6D00" stop-opacity="0.30"/>
+      <stop offset="70%" stop-color="#FF6D00" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#FF6D00" stop-opacity="0.05"/>
+    </radialGradient>
+    <radialGradient id="gradNotes" cx="55%" cy="55%" r="50%">
+      <stop offset="0%" stop-color="#00BFA5" stop-opacity="0.30"/>
+      <stop offset="70%" stop-color="#00BFA5" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#00BFA5" stop-opacity="0.05"/>
+    </radialGradient>
+
+    <!-- Center glow -->
+    <radialGradient id="centerGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- === Four overlapping domain circles (Venn-like) === -->
+  <!-- Styles — top-left (primary blue) -->
+  <circle cx="360" cy="290" r="270" fill="url(#gradStyles)" stroke="#2979FF" stroke-width="2.5" stroke-opacity="0.6"/>
+  <!-- Layout — top-right (accent cyan) -->
+  <circle cx="664" cy="290" r="270" fill="url(#gradLayout)" stroke="#00E5FF" stroke-width="2.5" stroke-opacity="0.6"/>
+  <!-- Properties — bottom-left (warm orange) -->
+  <circle cx="360" cy="478" r="270" fill="url(#gradProps)" stroke="#FF6D00" stroke-width="2.5" stroke-opacity="0.6"/>
+  <!-- Notes — bottom-right (cool teal) -->
+  <circle cx="664" cy="478" r="270" fill="url(#gradNotes)" stroke="#00BFA5" stroke-width="2.5" stroke-opacity="0.6"/>
+
+  <!-- Center convergence zone -->
+  <circle cx="512" cy="384" r="90" fill="url(#centerGlow)"/>
+  <ellipse cx="512" cy="384" rx="72" ry="62" fill="#0B0F1A" stroke="#FFFFFF" stroke-width="1.5" stroke-opacity="0.7"/>
+  <text x="512" y="374" text-anchor="middle" fill="#FFFFFF" font-family="sans-serif" font-size="22" font-weight="bold">Shuttleslide</text>
+  <text x="512" y="400" text-anchor="middle" fill="#FFFFFF" font-family="sans-serif" font-size="22" font-weight="bold">Round Trip</text>
+
+  <!-- === Quadrant Icons & Labels === -->
+
+  <!-- Styles: letter 'A' icon -->
+  <g transform="translate(260, 170)">
+    <circle cx="0" cy="0" r="36" fill="none" stroke="#2979FF" stroke-width="2" stroke-opacity="0.4"/>
+    <text x="0" y="14" text-anchor="middle" fill="#2979FF" font-family="sans-serif" font-size="52" font-weight="bold">A</text>
+    <text x="0" y="64" text-anchor="middle" fill="#E8EDF5" font-family="sans-serif" font-size="32">Styles</text>
+  </g>
+
+  <!-- Layout: 2x2 grid icon -->
+  <g transform="translate(764, 170)">
+    <rect x="-28" y="-28" width="56" height="56" rx="4" fill="none" stroke="#00E5FF" stroke-width="2" stroke-opacity="0.4"/>
+    <line x1="-28" y1="0" x2="28" y2="0" stroke="#00E5FF" stroke-width="2"/>
+    <line x1="0" y1="-28" x2="0" y2="28" stroke="#00E5FF" stroke-width="2"/>
+    <text x="0" y="64" text-anchor="middle" fill="#E8EDF5" font-family="sans-serif" font-size="32">Layout</text>
+  </g>
+
+  <!-- Properties: document/tag icon -->
+  <g transform="translate(260, 570)">
+    <rect x="-20" y="-30" width="40" height="50" rx="3" fill="none" stroke="#FF6D00" stroke-width="2.5" stroke-opacity="0.4"/>
+    <line x1="-12" y1="-14" x2="12" y2="-14" stroke="#FF6D00" stroke-width="2.5"/>
+    <line x1="-12" y1="-4" x2="12" y2="-4" stroke="#FF6D00" stroke-width="2.5"/>
+    <line x1="-12" y1="6" x2="8" y2="6" stroke="#FF6D00" stroke-width="2.5"/>
+    <!-- tag tail -->
+    <path d="M20,-10 L30,-5 L20,0" fill="none" stroke="#FF6D00" stroke-width="2.5" stroke-linejoin="round"/>
+    <text x="0" y="64" text-anchor="middle" fill="#E8EDF5" font-family="sans-serif" font-size="32">Properties</text>
+  </g>
+
+  <!-- Notes: speech bubble icon -->
+  <g transform="translate(764, 570)">
+    <path d="M-30,-22 Q-30,-32 -20,-32 L20,-32 Q30,-32 30,-22 L30,8 Q30,18 20,18 L8,18 L0,30 L-4,18 L-20,18 Q-30,18 -30,8 Z" fill="none" stroke="#00BFA5" stroke-width="2.5" stroke-opacity="0.4" stroke-linejoin="round"/>
+    <text x="0" y="64" text-anchor="middle" fill="#E8EDF5" font-family="sans-serif" font-size="32">Notes</text>
+  </g>
+
+  <!-- === Clockwise Arrow Ring === -->
+  <!-- Track circle (subtle dashed ring) -->
+  <circle cx="512" cy="384" r="390" fill="none" stroke="#8892B0" stroke-width="1.5" stroke-dasharray="8,10" stroke-opacity="0.3"/>
+
+  <!-- Four clockwise arc segments, each ending with an arrowhead -->
+  <!-- Top-right arc: 12 o'clock → 3 o'clock -->
+  <path d="M 512,-6 A 390,390 0 0,1 902,384" fill="none" stroke="#8892B0" stroke-width="3" marker-end="url(#arrowCW)"/>
+  <!-- Bottom-right arc: 3 o'clock → 6 o'clock -->
+  <path d="M 902,384 A 390,390 0 0,1 512,774" fill="none" stroke="#8892B0" stroke-width="3" marker-end="url(#arrowCW)"/>
+  <!-- Bottom-left arc: 6 o'clock → 9 o'clock -->
+  <path d="M 512,774 A 390,390 0 0,1 122,384" fill="none" stroke="#8892B0" stroke-width="3" marker-end="url(#arrowCW)"/>
+  <!-- Top-left arc: 9 o'clock → 12 o'clock -->
+  <path d="M 122,384 A 390,390 0 0,1 512,-6" fill="none" stroke="#8892B0" stroke-width="3" marker-end="url(#arrowCW)"/>
+
+  <!-- PPTX label at top of ring -->
+  <rect x="442" y="10" width="140" height="36" rx="18" fill="#0B0F1A" stroke="#8892B0" stroke-width="1.5"/>
+  <text x="512" y="34" text-anchor="middle" fill="#8892B0" font-family="sans-serif" font-size="22" font-weight="bold">PPTX</text>
+
+  <!-- HTML label at bottom of ring -->
+  <rect x="442" y="722" width="140" height="36" rx="18" fill="#0B0F1A" stroke="#8892B0" stroke-width="1.5"/>
+  <text x="512" y="746" text-anchor="middle" fill="#8892B0" font-family="sans-serif" font-size="22" font-weight="bold">HTML</text>
+
+  <!-- Small directional arrows indicating flow direction at 3 o'clock and 9 o'clock -->
+  <text x="920" y="392" text-anchor="middle" fill="#8892B0" font-family="sans-serif" font-size="18" opacity="0.6">➤</text>
+  <text x="104" y="392" text-anchor="middle" fill="#8892B0" font-family="sans-serif" font-size="18" opacity="0.6">➤</text>
+
+</svg>

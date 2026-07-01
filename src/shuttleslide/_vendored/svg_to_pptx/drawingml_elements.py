@@ -1,4 +1,10 @@
-"""SVG element converters: rect, circle, line, path, polygon, polyline, text, image, ellipse."""
+"""SVG element converters: rect, circle, line, path, polygon, polyline, text, image, ellipse.
+
+Modified by shuttleslide (local patch, mark with `# shuttleslide-local` in code):
+  - Per-paragraph <a:lnSpc> support: each <tspan> may carry its own
+    data-paragraph-line-height; falls back to frame-level value when absent.
+  Search this file for `# shuttleslide-local` to find all local modifications.
+"""
 
 from __future__ import annotations
 
@@ -1057,6 +1063,12 @@ def convert_text(elem: ET.Element, ctx: ConvertContext) -> ShapeResult | None:
     line_height_px = _f(line_height_attr) if line_height_attr is not None else None
     paragraph_runs: list[list[dict[str, Any]]] | None = None
     paragraph_space_before: list[float] = []
+    # shuttleslide-local L2: per-paragraph line-height, parallel to
+    # paragraph_runs.  Each entry is the effective lnSpc px for that <a:p>,
+    # read from the FIRST tspan of the paragraph group (subsequent soft-break
+    # tspans share the same paragraph spacing).  Falls back to frame-level
+    # line_height_px when the tspan carries no attribute (legacy SVG).
+    paragraph_line_heights_px: list[float] = []
     # Per-tspan widths (visual lines as the deck author drew them) regardless
     # of how many merge into one <a:p>; used to size the textbox so PowerPoint
     # has room to wrap text to the SVG's original line widths.
@@ -1099,13 +1111,26 @@ def convert_text(elem: ET.Element, ctx: ConvertContext) -> ShapeResult | None:
                         and not boundary_is_cjk:
                     prev[-1] = {**prev[-1], 'text': prev_text + ' '}
                 prev.extend(line_runs)
+                # shuttleslide-local L2: soft-break tspan shares the
+                # paragraph's existing line-height entry — do nothing here.
             else:
                 paragraph_runs.append(line_runs)
                 sb_attr = child.get('data-paragraph-space-before')
                 paragraph_space_before.append(_f(sb_attr) if sb_attr else 0.0)
+                # shuttleslide-local L2: capture this paragraph's line-height.
+                # Prefer the tspan-level attribute; fall back to frame-level.
+                ts_lh_attr = child.get('data-paragraph-line-height')
+                if ts_lh_attr is not None:
+                    ts_lh = _f(ts_lh_attr)
+                    paragraph_line_heights_px.append(
+                        ts_lh if ts_lh and ts_lh > 0 else line_height_px
+                    )
+                else:
+                    paragraph_line_heights_px.append(line_height_px)
         if not paragraph_runs:
             paragraph_runs = None
             paragraph_space_before = []
+            paragraph_line_heights_px = []
             visual_line_widths = []
 
     if paragraph_runs is not None:
@@ -1231,11 +1256,19 @@ def convert_text(elem: ET.Element, ctx: ConvertContext) -> ShapeResult | None:
     rot_attr = f' rot="{text_rot}"' if text_rot else ''
 
     if paragraph_runs is not None:
-        # SVG dy(px) -> hundredths-of-a-point: dy_pt = dy_px * 0.75, then x100.
-        line_spc_val = round(line_height_px * FONT_PX_TO_HUNDREDTHS_PT)
-        ln_spc_xml = f'<a:lnSpc><a:spcPts val="{line_spc_val}"/></a:lnSpc>'
+        # shuttleslide-local L2: per-paragraph lnSpc.  Each <a:p> uses its
+        # own line-height (from paragraph_line_heights_px, captured during
+        # tspan collection); falls back to frame-level when entry missing
+        # (defensive — list length should always match paragraph_runs).
         paragraph_xml_chunks = []
-        for line, extra_px in zip(paragraph_runs, paragraph_space_before):
+        for i, (line, extra_px) in enumerate(zip(paragraph_runs, paragraph_space_before)):
+            if i < len(paragraph_line_heights_px) and paragraph_line_heights_px[i] is not None:
+                eff_lh_px = paragraph_line_heights_px[i]
+            else:
+                eff_lh_px = line_height_px
+            # SVG dy(px) -> hundredths-of-a-point: dy_pt = dy_px * 0.75, then x100.
+            line_spc_val = round(eff_lh_px * FONT_PX_TO_HUNDREDTHS_PT)
+            ln_spc_xml = f'<a:lnSpc><a:spcPts val="{line_spc_val}"/></a:lnSpc>'
             spc_bef_xml = ''
             if extra_px > 0:
                 spc_bef_val = round(extra_px * FONT_PX_TO_HUNDREDTHS_PT)

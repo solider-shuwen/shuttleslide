@@ -164,7 +164,7 @@ class BulletsMixin:
             return BulletProperties(type='none')
 
         # Look up master body styles
-        _, body_styles = self._get_current_master_styles()
+        _, body_styles, _ = self._get_current_master_styles()
         # Master levels are 1-9, paragraph levels are 0-8
         master_key = para_level + 1
         master_style = body_styles.get(master_key) if body_styles else None

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Optional
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 if TYPE_CHECKING:
     from shuttleslide.agent.llm.tool_call import LLMResponseEvent
@@ -101,6 +101,31 @@ class AgentConfig:
     # not match the description — use only for offline dev / tests).
     enable_vlm_verification: bool = True
 
+    # Master switch for VLM description generation on user-uploaded images.
+    # When True (default), uploads without a user-supplied description are
+    # described via the VLM endpoint above. When False, the description
+    # field stays empty — the upload still succeeds, downstream consumers
+    # just see ``description=""``. Mirrors enable_vlm_verification's shape.
+    enable_vlm_description: bool = True
+
+    # User-uploaded image library: images the user supplied via the
+    # homepage before the pipeline started. Populated by the review
+    # server's POST /api/start handler (which decodes the base64 payload,
+    # re-encodes via Pillow, writes to the run dir, and runs VLM
+    # description on blanks). The outline planner sees this list and is
+    # REQUIRED to consume every entry before falling back to svg/web for
+    # any remaining slots — this is the "force-priority" rule.
+    #
+    # Each entry shape (all keys required, validated in validate()):
+    #   {
+    #     "image_id":          str, unique (used as source_ref in outline)
+    #     "path":              str, file path (abs or rel to output_dir)
+    #     "description":       str, may be "" when VLM is disabled
+    #     "mime":              str, e.g. "image/jpeg"
+    #     "original_filename": str, for attribution in UIs
+    #   }
+    user_image_library: List[Dict[str, Any]] = field(default_factory=list)
+
     # ------------------------------------------------------------------
     # Canvas dimensions
     # ------------------------------------------------------------------
@@ -111,6 +136,57 @@ class AgentConfig:
     # Defaults reproduce the historical 16:9 slide (1280x720 CSS px).
     canvas_width_emu: int = 12192000
     canvas_height_emu: int = 6858000
+    # Original aspect-ratio string the user chose (e.g. "9:16", "1:1").
+    # None = unspecified → canvas_*_emu defaults apply (16:9). When set,
+    # canvas_*_emu should already be populated to match (callers like the
+    # review server use shuttleslide.agent.geometry.aspect_ratio_to_dimensions
+    # to derive both from this single string). The string itself is read
+    # by extension-point house_rules providers (e.g. pro's canvas hook)
+    # to decide whether to override the default HOUSE_RULES prompt.
+    canvas_aspect_ratio: Optional[str] = None
+
+    # HTTP-bound fields — flow into Authorization headers, URLs, or model
+    # identifiers that RFC 7230/3986 require to be ASCII-only. Non-ASCII
+    # here crashes deep inside httpx with a cryptic UnicodeEncodeError
+    # (e.g. "'ascii' codec can't encode characters in position 7-18" from
+    # the `Authorization: Bearer <key>` header build). Validated at the
+    # config boundary so every LLM call benefits, not just the one that
+    # happened to surface the bug. Common cause: copy-paste from chat
+    # apps / IDEs introducing zero-width spaces (U+200B), BOM (U+FEFF),
+    # non-breaking spaces (U+00A0), or full-width chars (U+FF01-FF5E).
+    _HTTP_ASCII_FIELDS = (
+        "api_base", "api_key", "model",
+        "vlm_api_base", "vlm_api_key", "vlm_model",
+        "image_search_base_url", "image_search_api_key",
+    )
+
+    def validate_ascii_http_fields(self) -> None:
+        """Reject non-ASCII in HTTP-bound fields with a clear, actionable error.
+
+        Empty values are allowed (caller decides which fields are required —
+        see :meth:`validate`). Non-empty values must round-trip through
+        ASCII or we raise ``ValueError`` naming the offending field and
+        the position of the first non-ASCII character.
+
+        Kept separate from :meth:`validate` so callers that construct
+        partial configs (e.g. ``api_vlm_describe``'s stub, which only
+        carries VLM creds) can run the ASCII check alone without tripping
+        the required-field checks.
+        """
+        for name in self._HTTP_ASCII_FIELDS:
+            value = getattr(self, name, "") or ""
+            if not value:
+                continue
+            try:
+                value.encode("ascii")
+            except UnicodeEncodeError as exc:
+                raise ValueError(
+                    f"{name} must contain only ASCII characters — "
+                    f"non-ASCII at position {exc.start} "
+                    f"(often caused by copy-paste from chat apps introducing "
+                    f"zero-width spaces or full-width chars). "
+                    f"First 30 chars: {value[:30]!r}"
+                ) from exc
 
     @classmethod
     def from_env(cls, **overrides) -> "AgentConfig":
@@ -154,11 +230,23 @@ class AgentConfig:
                 "yes",
                 "on",
             )
+        # Same string-flag parse path as enable_vlm_verification.
+        vlm_desc_switch = os.environ.get("SHUTTLESLIDE_ENABLE_VLM_DESCRIPTION", "")
+        if vlm_desc_switch:
+            defaults["enable_vlm_description"] = vlm_desc_switch.lower() in (
+                "1",
+                "true",
+                "yes",
+                "on",
+            )
         defaults.update({k: v for k, v in overrides.items() if v is not None})
         return cls(**defaults)
 
     def validate(self) -> None:
         """Raise ValueError if required fields are missing."""
+        # ASCII check first — surfaces a clear error before required-field
+        # checks pass and the bad value reaches httpx's header encoder.
+        self.validate_ascii_http_fields()
         if not self.api_base:
             raise ValueError(
                 "api_base is required (set SHUTTLESLIDE_API_BASE env var or pass --api-base)"
@@ -212,3 +300,39 @@ class AgentConfig:
                 f"to the text endpoint and VLM calls fail with confusing "
                 f"deserialization errors."
             )
+
+        # user_image_library entries must carry the canonical shape so
+        # downstream code (outline planner prompt, image_acquirer lookup)
+        # can rely on it. Empty list is fine (no uploads = legacy path).
+        if self.user_image_library:
+            _REQUIRED_LIB_KEYS = (
+                "image_id",
+                "path",
+                "description",
+                "mime",
+                "original_filename",
+            )
+            seen_ids: set[str] = set()
+            for i, entry in enumerate(self.user_image_library):
+                if not isinstance(entry, dict):
+                    raise ValueError(
+                        f"user_image_library[{i}] must be a dict (got "
+                        f"{type(entry).__name__})"
+                    )
+                missing = [k for k in _REQUIRED_LIB_KEYS if k not in entry]
+                if missing:
+                    raise ValueError(
+                        f"user_image_library[{i}] missing keys: {missing}"
+                    )
+                image_id = entry["image_id"]
+                if not isinstance(image_id, str) or not image_id:
+                    raise ValueError(
+                        f"user_image_library[{i}].image_id must be a "
+                        f"non-empty string"
+                    )
+                if image_id in seen_ids:
+                    raise ValueError(
+                        f"user_image_library[{i}].image_id {image_id!r} "
+                        f"is duplicate — image_id must be unique"
+                    )
+                seen_ids.add(image_id)

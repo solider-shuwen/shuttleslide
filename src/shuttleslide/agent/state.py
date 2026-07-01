@@ -120,6 +120,16 @@ class AgentState:
     # produce "svg_file" / "image_file".
     slide_images: Dict[int, Dict[str, Dict[str, Any]]] = field(default_factory=dict)
 
+    # User-uploaded image library — populated at pipeline start from
+    # AgentConfig.user_image_library (the review server fills the config
+    # from POST /api/start's user_images payload). The outline planner
+    # reads this list to honour the "user uploads MUST be used first"
+    # rule; the image_acquirer's source_type="user_upload" branch reads
+    # it to resolve source_ref (== image_id) into a concrete file.
+    # Shape parity with AgentConfig.user_image_library — see config.py
+    # for the per-entry contract.
+    user_image_library: List[Dict[str, Any]] = field(default_factory=list)
+
     # Extension stage outputs: stage_name -> JSON-safe dict.
     #
     # This is the ONLY sanctioned place for pro / extension stages
@@ -145,6 +155,25 @@ class AgentState:
     # Diagnostics
     errors: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
+
+    # Stale markers for downstream stages (review pipeline).
+    #
+    # When the user edits an upstream stage after downstream stages have
+    # already produced output, the affected downstream items are marked
+    # stale rather than auto-regenerated. Marks carry the upstream source
+    # identity and an optional snapshot of the pre-edit state (used by
+    # the incremental regenerator to build before/after diffs).
+    #
+    # Shape: ``{stage_name: [mark_dict, ...]}``. Each mark_dict is the
+    # JSON-safe form of ``StaleMark`` (see ``review/stale.py``). Keys
+    # are downstream stage names (``"images"`` / ``"slides"`` /
+    # ``"rendered"``); ``theme`` and ``outline`` are sources and never
+    # appear here.
+    #
+    # Operated on through ``StaleStore`` — direct dict mutation bypasses
+    # dedup. The dict form (not List[StaleMark]) keeps AgentState JSON-safe
+    # and avoids importing the dataclass into state.py.
+    stale_marks: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
 
     # ------------------------------------------------------------------
     # Canvas geometry derived helpers (CSS px). Convenience properties so

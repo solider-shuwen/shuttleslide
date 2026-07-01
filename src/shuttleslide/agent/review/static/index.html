@@ -19,7 +19,7 @@
   </script>
   <!-- Pin marked version so CDN drift doesn't break the UI. -->
   <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
-  <link rel="stylesheet" href="/styles.css?v=phase15" />
+  <link rel="stylesheet" href="/styles.css?v=phase31" />
 </head>
 <body class="config-active">
   <!-- Floating theme toggle — always visible, top-right. Fixed position
@@ -112,10 +112,58 @@
               <div class="file-note">Used verbatim — the file is the topic body.</div>
             </div>
           </label>
+
+          <label class="user-image-picker-label">Image assets (optional)
+            <div class="user-image-picker">
+              <input type="file" id="user-images-input"
+                     multiple
+                     accept="image/png,image/jpeg,image/webp" />
+              <div class="file-note">
+                Uploaded images form a library the outline planner MUST place
+                on slides before falling back to SVG / web search. Leave a
+                description blank to auto-fill via VLM at submit, or click
+                Auto-describe for instant feedback.
+              </div>
+              <div id="user-image-list" class="user-image-list"></div>
+            </div>
+          </label>
         </fieldset>
 
         <fieldset>
           <legend>Style</legend>
+          <div id="canvas-ratio-picker" class="canvas-ratio-picker" hidden>
+            <label class="canvas-ratio-label">Canvas aspect ratio</label>
+            <div class="canvas-ratio-options">
+              <label class="canvas-ratio-option">
+                <input type="radio" name="canvas_aspect_ratio" value="16:9" checked data-persist="local" />
+                <span class="canvas-ratio-shape" data-shape="landscape"></span>
+                <span class="canvas-ratio-name">16:9</span>
+              </label>
+              <label class="canvas-ratio-option">
+                <input type="radio" name="canvas_aspect_ratio" value="9:16" data-persist="local" />
+                <span class="canvas-ratio-shape" data-shape="portrait"></span>
+                <span class="canvas-ratio-name">9:16</span>
+              </label>
+              <label class="canvas-ratio-option">
+                <input type="radio" name="canvas_aspect_ratio" value="1:1" data-persist="local" />
+                <span class="canvas-ratio-shape" data-shape="square"></span>
+                <span class="canvas-ratio-name">1:1</span>
+              </label>
+              <label class="canvas-ratio-option">
+                <input type="radio" name="canvas_aspect_ratio" value="3:4" data-persist="local" />
+                <span class="canvas-ratio-shape" data-shape="portrait"></span>
+                <span class="canvas-ratio-name">3:4</span>
+              </label>
+              <label class="canvas-ratio-option canvas-ratio-custom">
+                <input type="radio" name="canvas_aspect_ratio" value="custom" data-persist="local" />
+                <span class="canvas-ratio-name">Custom</span>
+                <input type="text" name="canvas_aspect_ratio_custom"
+                       placeholder="W:H (e.g. 4:3)"
+                       pattern="[0-9]+:[0-9]+"
+                       data-persist="local" />
+              </label>
+            </div>
+          </div>
           <label>Style hint
             <input type="text" name="style_hint"
                    placeholder="business / cute / tech / editorial / ..."
@@ -171,6 +219,15 @@
 
   <!-- ============ PIPELINE SCREEN — wraps the existing stage-bar + main. ============ -->
   <section id="pipeline-screen">
+    <!-- "正在修改" progress bar — shown globally while an LLM edit is in flight.
+         All mutating affordances are disabled via body.edit-in-progress while
+         this is visible. Cancel triggers a cancel_edit WS message; the server
+         interrupts the LLM call and replies edit_cancelled. -->
+    <div id="edit-progress-bar" class="edit-progress-bar hidden" role="status" aria-live="polite">
+      <span class="edit-progress-spinner" aria-hidden="true"></span>
+      <span id="edit-progress-label">正在修改…</span>
+      <button id="edit-cancel-btn" type="button" title="中断正在进行的 LLM 修改">取消</button>
+    </div>
     <header id="stage-bar">
       <div id="stage-list"></div>
       <div id="actions">
@@ -183,23 +240,39 @@
           <span class="home-label">Home</span>
         </button>
         <button id="approve-btn" disabled>Approve</button>
+        <button id="download-pptx-btn" hidden>Download PPTX</button>
       </div>
     </header>
 
   <main>
     <aside id="thumbnails">
+      <div class="sidebar-tabs" role="tablist">
+        <button class="sidebar-tab active" data-sidebar-tab="thumbs" role="tab" aria-selected="true">Slides</button>
+        <button class="sidebar-tab" data-sidebar-tab="history" role="tab" aria-selected="false">History</button>
+      </div>
       <h3 id="thumb-title">Thumbnails</h3>
-      <div id="thumb-list">
+      <div id="thumb-list" data-sidebar-body="thumbs">
         <p style="color:#999;font-size:12px;padding:8px;">No stage output yet.</p>
+      </div>
+      <div id="history-list" data-sidebar-body="history" hidden>
+        <p class="placeholder">No edits yet.</p>
       </div>
     </aside>
 
     <section id="preview">
-      <h3>Preview</h3>
+      <h3>Preview
+        <button id="preview-layers-btn" type="button" title="Layers (toggle element panel)">▤</button>
+        <button id="preview-add-image-btn" type="button" title="Add image to slide (pick a PNG/JPEG from disk)">＋</button>
+        <button id="preview-fullscreen-btn" type="button" title="Fullscreen (Esc to exit)">⛶</button>
+      </h3>
+      <!-- Hidden file input driven by #preview-add-image-btn. Lives outside
+           the slide iframe so change events fire even when the iframe is
+           unfocused. Accept restricted to PNG/JPEG because v1 rejects SVG. -->
+      <input id="preview-add-image-input" type="file" accept="image/png,image/jpeg" hidden>
       <div id="progress-strip" class="state-idle">
         <div class="progress-header">
           <span class="progress-stage-icon" aria-hidden="true"></span>
-          <span class="progress-stage-name">Waiting for pipeline to start...</span>
+          <span class="progress-stage-name">Loading...</span>
           <span class="progress-stats"></span>
           <span class="progress-eta"></span>
         </div>
@@ -207,10 +280,45 @@
           <div class="progress-bar-fill"></div>
         </div>
       </div>
+      <!-- Layers panel — floating overlay in top-right of #preview.
+           Toggle via the ☱ button in the preview header. Lists every
+           .ppt-slide direct child + every state-backed image (svg_file
+           or raster image_file, both via the data-slot anchor) in the
+           current slide's iframe, so users can click to select elements
+           that are visually obscured by siblings above.
+           Image layers also jump to the matching thumbnail in the
+           Images sidebar tab. -->
+      <div id="layers-panel" hidden>
+        <div class="layers-panel-header">
+          <span class="layers-panel-title">Layers</span>
+          <button type="button" id="layers-close" title="Close layers panel" aria-label="Close">×</button>
+        </div>
+        <div id="layers-list">
+          <p class="layers-panel-empty">Open a slide to see its layers.</p>
+        </div>
+      </div>
       <div id="preview-content">
         <p style="color: #999;">No stage output yet.</p>
       </div>
-      <div id="done-banner" style="display:none;"></div>
+      <!-- Slides-ready banner — collapsible like #log-drawer.
+           Header (toggle + title + file count) always visible once shown;
+           body (file list) toggles via .collapsed/.expanded classes.
+           showPptxDownloadButton in app.js populates #done-banner-body
+           and forces .expanded as soon as the `rendered` stage lands
+           (mid-pipeline when pro stages are installed). The title says
+           "Slides ready", NOT "Pipeline complete" — the latter is the
+           status strip's job, gated on the actual pipeline_done event. -->
+      <div id="done-banner" class="collapsed" hidden>
+        <div id="done-banner-header">
+          <button type="button" id="done-toggle"
+                  aria-expanded="false" aria-controls="done-banner-body">
+            <span class="done-caret">&#9656;</span>
+            <span class="done-title">Slides ready</span>
+            <span id="done-file-count" class="done-file-count"></span>
+          </button>
+        </div>
+        <div id="done-banner-body"></div>
+      </div>
 
       <!-- Collapsible log drawer — docks to bottom of #preview.
            Collapsed by default; expands on click or when a 'pptx'
@@ -231,15 +339,65 @@
     </section>
 
     <aside id="chat">
-      <h3>Chat</h3>
-      <p class="placeholder">
-        Element editing arrives in PR3.<br /><br />
-        For now you can Approve each stage (Export on the final stage).
-      </p>
+      <h3>
+        Chat
+        <span id="chat-target" class="chat-target-badge" hidden></span>
+      </h3>
+      <div id="chat-history" class="chat-history" role="log" aria-live="polite">
+        <p class="placeholder">Select an editable element to start chatting.</p>
+      </div>
+      <div id="chat-controls">
+        <div class="chat-mode-toggle" role="tablist">
+          <button type="button" class="chat-mode active" data-mode="llm">Ask LLM</button>
+          <button type="button" class="chat-mode" data-mode="direct">Direct</button>
+          <button type="button" class="chat-mode" data-mode="upload">Upload</button>
+        </div>
+        <textarea id="chat-input"
+                  placeholder="Ask for a change — e.g. 'make the hero more vibrant'"
+                  rows="3"></textarea>
+        <textarea id="chat-img-desc"
+                  placeholder="Optional: describe this image (leave blank to auto-generate via VLM)"
+                  rows="2"
+                  hidden></textarea>
+        <input type="file" id="chat-file-input" hidden accept="image/*" />
+        <div class="chat-actions">
+          <button type="button" id="chat-undo" disabled>Undo</button>
+          <button type="button" id="chat-delete" hidden>Delete</button>
+          <button type="button" id="chat-send" disabled>Send</button>
+        </div>
+        <div id="chat-error" class="chat-error" hidden></div>
+      </div>
     </aside>
   </main>
   </section> <!-- /pipeline-screen -->
 
-  <script src="/app.js?v=phase15" defer></script>
+  <!--
+    UI extension loader — fetches /api/ui-extensions and dynamically
+    injects one <script> per URL BEFORE app.js runs. This lets external
+    packages (e.g. shuttleslide-pro) register custom stage renderers
+    via window.SlidecraftReview.registerStageRenderer(...).
+
+    Failure-isolation: any fetch / injection error is swallowed so a
+    broken extension never blocks the core UI — the worst case is that
+    extension-registered stages (voiceover, render_video, ...) don't
+    get their custom UI and fall back to whatever the core provides.
+  -->
+  <script>
+    (function () {
+      fetch("/api/ui-extensions")
+        .then(function (r) { return r.ok ? r.json() : { scripts: [] }; })
+        .then(function (data) {
+          var scripts = (data && data.scripts) || [];
+          for (var i = 0; i < scripts.length; i++) {
+            var s = document.createElement("script");
+            s.src = scripts[i];
+            s.defer = true;
+            document.head.appendChild(s);
+          }
+        })
+        .catch(function () { /* best-effort — see comment above */ });
+    })();
+  </script>
+  <script src="/app.js?v=phase31" defer></script>
 </body>
 </html>

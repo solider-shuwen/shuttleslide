@@ -88,23 +88,27 @@ class LLMClient:
     # the node code stays provider-agnostic. This is the only place that
     # knows about DeepSeek's thinking-mode limitation.
 
-    def _normalize_tool_choice(self, tool_choice: str) -> str:
-        """Downgrade unsupported tool_choice values for the configured model.
+    def _normalize_tool_choice(self, tool_choice: str) -> Optional[str]:
+        """Normalize tool_choice for the configured provider/model.
 
-        Currently handles the one known incompatibility: DeepSeek-reasoner
-        under thinking mode rejects ``tool_choice="required"``. When the
-        caller has opted in via ``disable_required_tool_choice=True``, we
-        silently rewrite ``"required"`` -> ``"auto"`` so the pipeline keeps
-        working. Returning ``"auto"`` (rather than ``"none"``) preserves
-        the intent that the model SHOULD call a tool — and the per-node
-        retry loop already notices a missing tool call and prompts the
-        model to retry.
+        Returns the value to send, or ``None`` to omit the field from the
+        request entirely.
+
+        DeepSeek's thinking-mode models (deepseek-reasoner, deepseek-v4-flash
+        with thinking enabled) reject ANY non-default ``tool_choice`` value
+        with HTTP 400 ``Thinking mode does not support this tool_choice`` —
+        not just ``"required"`` but also ``"auto"``. An earlier version of
+        this method downgraded ``"required"`` -> ``"auto"``, which swapped
+        one 400 for another. When the caller has opted in via
+        ``disable_required_tool_choice=True``, we omit ``tool_choice``
+        entirely for the "force a tool call" intents (``required``, ``auto``).
+
+        ``"none"`` is preserved: it's an explicit "don't call tools" opt-out
+        that doesn't conflict with thinking mode, and callers may pass it
+        intentionally (e.g. plain chat-with-tools-but-no-call-allowed).
         """
-        if (
-            self.disable_required_tool_choice
-            and tool_choice == "required"
-        ):
-            return "auto"
+        if self.disable_required_tool_choice and tool_choice in ("required", "auto"):
+            return None
         return tool_choice
 
     # -- lazy client construction ------------------------------------------
@@ -176,7 +180,9 @@ class LLMClient:
             kwargs["max_tokens"] = max_tokens
         if tools:
             kwargs["tools"] = tools
-            kwargs["tool_choice"] = self._normalize_tool_choice(tool_choice)
+            tc = self._normalize_tool_choice(tool_choice)
+            if tc is not None:
+                kwargs["tool_choice"] = tc
         resp = await client.chat.completions.create(**kwargs)
         return self._parse(resp)
 
@@ -201,7 +207,9 @@ class LLMClient:
             kwargs["max_tokens"] = max_tokens
         if tools:
             kwargs["tools"] = tools
-            kwargs["tool_choice"] = self._normalize_tool_choice(tool_choice)
+            tc = self._normalize_tool_choice(tool_choice)
+            if tc is not None:
+                kwargs["tool_choice"] = tc
 
         resp = client.chat.completions.create(**kwargs)
         return self._parse(resp)

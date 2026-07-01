@@ -1,0 +1,85 @@
+<svg id="hero_round_trip_loop" data-slot="hero_round_trip_loop" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720">
+  <desc>Abstract hero visual: a large glowing circular loop/arrow diagram in primary blue and cyan, symbolizing bidirectional round-trip conversion. The loop is composed of two opposing curved arrows (PPTX→HTML and HTML→PPTX) meeting at a central diamond node labeled 'Metadata Vault'. Subtle orbital data particles dot the background. Glassmorphism glow effects.</desc>
+  <defs>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="glow-strong" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="18" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <marker id="arrow-blue" viewBox="0 0 14 14" refX="12" refY="7" markerWidth="9" markerHeight="9" orient="auto">
+      <path d="M 0 0 L 14 7 L 0 14 z" fill="#2979FF"/>
+    </marker>
+    <marker id="arrow-cyan" viewBox="0 0 14 14" refX="12" refY="7" markerWidth="9" markerHeight="9" orient="auto">
+      <path d="M 0 0 L 14 7 L 0 14 z" fill="#00E5FF"/>
+    </marker>
+  </defs>
+
+  <!-- Ambient background glow pools (left side only) -->
+  <circle cx="300" cy="340" r="160" fill="#2979FF" opacity="0.04" filter="url(#glow-strong)"/>
+  <circle cx="390" cy="390" r="100" fill="#00E5FF" opacity="0.035" filter="url(#glow-strong)"/>
+  <circle cx="210" cy="420" r="70" fill="#2979FF" opacity="0.025" filter="url(#glow-strong)"/>
+
+  <!-- Orbital guide rings -->
+  <circle cx="340" cy="360" r="230" fill="none" stroke="#2979FF" stroke-width="0.5" opacity="0.1" stroke-dasharray="4 12"/>
+  <circle cx="340" cy="360" r="200" fill="none" stroke="#00E5FF" stroke-width="0.5" opacity="0.08" stroke-dasharray="2 8"/>
+  <ellipse cx="340" cy="360" rx="190" ry="190" fill="none" stroke="#2979FF" stroke-width="0.8" opacity="0.07"/>
+
+  <!-- Top arc: PPTX → HTML (clockwise, blue) -->
+  <path d="M 160,360 A 180,180 0 0,1 520,360" fill="none" stroke="#2979FF" stroke-width="3.5" marker-end="url(#arrow-blue)" opacity="0.85"/>
+  <path d="M 160,360 A 180,180 0 0,1 520,360" fill="none" stroke="#2979FF" stroke-width="10" opacity="0.12" filter="url(#glow-strong)"/>
+
+  <!-- Bottom arc: HTML → PPTX (counterclockwise, cyan) -->
+  <path d="M 520,360 A 180,180 0 0,0 160,360" fill="none" stroke="#00E5FF" stroke-width="3.5" marker-end="url(#arrow-cyan)" opacity="0.85"/>
+  <path d="M 520,360 A 180,180 0 0,0 160,360" fill="none" stroke="#00E5FF" stroke-width="10" opacity="0.12" filter="url(#glow-strong)"/>
+
+  <!-- Arc labels -->
+  <text x="340" y="192" text-anchor="middle" font-family="sans-serif" font-size="32" fill="#2979FF" font-weight="bold" opacity="0.9">PPTX → HTML</text>
+  <text x="340" y="555" text-anchor="middle" font-family="sans-serif" font-size="32" fill="#00E5FF" font-weight="bold" opacity="0.9">HTML → PPTX</text>
+
+  <!-- Central diamond node -->
+  <polygon points="340,300 385,360 340,420 295,360" fill="#0B0F1A" stroke="#00E5FF" stroke-width="2" filter="url(#glow)"/>
+  <polygon points="340,300 385,360 340,420 295,360" fill="none" stroke="#2979FF" stroke-width="1" opacity="0.4"/>
+  <polygon points="340,300 385,360 340,420 295,360" fill="none" stroke="#00E5FF" stroke-width="6" opacity="0.15" filter="url(#glow-strong)"/>
+
+  <!-- Diamond node labels -->
+  <text x="340" y="365" text-anchor="middle" font-family="sans-serif" font-size="28" fill="#00E5FF" font-weight="bold" letter-spacing="1">Metadata</text>
+  <text x="340" y="395" text-anchor="middle" font-family="sans-serif" font-size="28" fill="#00E5FF" font-weight="bold" letter-spacing="1">Vault</text>
+
+  <!-- Orbital data particles (primary) -->
+  <circle cx="340" cy="130" r="3" fill="#2979FF" opacity="0.6" filter="url(#glow)"/>
+  <circle cx="510" cy="210" r="2.5" fill="#00E5FF" opacity="0.55" filter="url(#glow)"/>
+  <circle cx="550" cy="360" r="3" fill="#2979FF" opacity="0.5" filter="url(#glow)"/>
+  <circle cx="500" cy="510" r="2" fill="#00E5FF" opacity="0.6" filter="url(#glow)"/>
+  <circle cx="340" cy="590" r="3" fill="#2979FF" opacity="0.5" filter="url(#glow)"/>
+  <circle cx="180" cy="510" r="2.5" fill="#00E5FF" opacity="0.45" filter="url(#glow)"/>
+  <circle cx="130" cy="360" r="2" fill="#2979FF" opacity="0.55" filter="url(#glow)"/>
+  <circle cx="180" cy="210" r="3" fill="#00E5FF" opacity="0.5" filter="url(#glow)"/>
+
+  <!-- Secondary stray particles -->
+  <circle cx="430" cy="150" r="1.5" fill="#E8EDF5" opacity="0.25"/>
+  <circle cx="260" cy="145" r="1.5" fill="#E8EDF5" opacity="0.2"/>
+  <circle cx="530" cy="300" r="1.5" fill="#E8EDF5" opacity="0.25"/>
+  <circle cx="145" cy="290" r="1" fill="#E8EDF5" opacity="0.15"/>
+  <circle cx="440" cy="570" r="1.5" fill="#E8EDF5" opacity="0.2"/>
+  <circle cx="260" cy="580" r="1" fill="#E8EDF5" opacity="0.25"/>
+  <circle cx="145" cy="430" r="1" fill="#E8EDF5" opacity="0.15"/>
+  <circle cx="555" cy="420" r="1.5" fill="#E8EDF5" opacity="0.2"/>
+
+  <!-- Tiny data dots along orbital paths -->
+  <circle cx="300" cy="135" r="1" fill="#2979FF" opacity="0.3"/>
+  <circle cx="545" cy="280" r="1" fill="#00E5FF" opacity="0.3"/>
+  <circle cx="545" cy="440" r="1" fill="#2979FF" opacity="0.25"/>
+  <circle cx="300" cy="585" r="1" fill="#00E5FF" opacity="0.3"/>
+  <circle cx="135" cy="440" r="1" fill="#2979FF" opacity="0.25"/>
+  <circle cx="135" cy="280" r="1" fill="#00E5FF" opacity="0.3"/>
+</svg>

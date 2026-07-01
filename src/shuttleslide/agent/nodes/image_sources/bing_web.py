@@ -55,6 +55,19 @@ _GOTO_TIMEOUT_MS = 15_000
 _SCROLL_ITERATIONS = 2
 _SCROLL_WAIT_MS = 500
 
+# Real-Chrome UA + en-US locale. cn.bing.com silently ignores the
+# ``site:`` URL filter when the request carries the default HeadlessChrome
+# UA + a zh-CN system locale — Bing's anti-bot layer treats that
+# combination as automated and serves the unfiltered default result set.
+# Spoofing a real Chrome UA + en-US locale makes ``site:`` actually take
+# effect (verified 2026-06-30: same URL, default config → 0/5 pixabay,
+# this config → 5/5 pixabay).
+_REAL_CHROME_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
+
 # JavaScript extractor. Runs in the page context. Takes the desired
 # candidate count and returns up to 3x that number (so the Python side
 # has room to filter broken URLs / wrong mime without re-scraping).
@@ -97,9 +110,28 @@ class BingWebScrapeSearchProvider(ImageSearchProvider):
     # Chromium to launch.
     requires_browser: bool = True
 
-    def __init__(self, base_url: str = "https://cn.bing.com"):
+    def __init__(
+        self,
+        base_url: str = "https://cn.bing.com",
+        site_filter: Optional[str] = None#"pixabay.com",
+    ):
         # Strip trailing slash so URL composition is uniform downstream.
         self.base_url = base_url.rstrip("/")
+        # ``site:`` filter appended to Bing's ``qft`` URL parameter.
+        # Defaults to pixabay.com because cn.bing.com's keyword matching is
+        # poor — measured 2026-06-30:
+        #   - "team collaboration office photo" → Microsoft Teams app
+        #     screenshots (literal keyword hit on "team")
+        #   - "minimalist poster design"       → minimalist room interiors
+        #     (matched "minimalist", ignored "poster")
+        #   - "modern coffee shop interior"    → zcool/danci/sinaimg (CN
+        #     content pool, mostly irrelevant)
+        # Restricting to pixabay.com (a stock-photo library indexed well by
+        # cn.bing.com — 5/5 hits in testing) restores semantic-match
+        # quality. unsplash.com / pexels.com return 0 results on cn.bing.com
+        # due to thin index coverage, so pixabay is the only viable default.
+        # Pass ``None`` to restore the unfiltered Bing behavior.
+        self.site_filter = site_filter or None
         self._browser_manager: Optional[Any] = None
 
     def attach_browser_manager(self, browser_manager: Any) -> None:
@@ -122,12 +154,30 @@ class BingWebScrapeSearchProvider(ImageSearchProvider):
             return []
 
         url = self._build_search_url(query, aspect_ratio)
+        # Open a context (not just a page) with locale=en-US + real Chrome
+        # UA. Without this, cn.bing.com silently ignores ``site:`` filters
+        # and returns its default (often irrelevant) result set — see
+        # _REAL_CHROME_UA docstring.
         try:
-            page = await self._browser_manager.new_page()
+            context = await self._browser_manager.new_context(
+                locale="en-US",
+                user_agent=_REAL_CHROME_UA,
+            )
+        except Exception as exc:
+            logger.warning(
+                "BingWebScrapeSearchProvider: failed to open context: %s", exc
+            )
+            return []
+        try:
+            page = await context.new_page()
         except Exception as exc:
             logger.warning(
                 "BingWebScrapeSearchProvider: failed to open page: %s", exc
             )
+            try:
+                await context.close()
+            except Exception:
+                pass
             return []
 
         try:
@@ -162,6 +212,10 @@ class BingWebScrapeSearchProvider(ImageSearchProvider):
                 await page.close()
             except Exception:
                 pass
+            try:
+                await context.close()
+            except Exception:
+                pass
 
         out: List[ImageCandidate] = []
         for c in raw_candidates:
@@ -179,13 +233,44 @@ class BingWebScrapeSearchProvider(ImageSearchProvider):
             )
             if len(out) >= max_results:
                 break
+        # Surface the resolved URLs at INFO so the review-pipeline console
+        # shows what the image searcher actually got back — essential for
+        # diagnosing "search returned irrelevant results" complaints
+        # (cn.bing.com keyword matching is poor without site_filter).
+        if out:
+            logger.info(
+                "Bing image search %r (site=%s, aspect=%s) → %d candidate(s):",
+                query,
+                self.site_filter or "<none>",
+                aspect_ratio,
+                len(out),
+            )
+            for i, c in enumerate(out, 1):
+                logger.info("  [%d] %s", i, c.url)
+        else:
+            logger.info(
+                "Bing image search %r → 0 candidates (site=%s, aspect=%s)",
+                query,
+                self.site_filter or "<none>",
+                aspect_ratio,
+            )
         return out
 
     def _build_search_url(self, query: str, aspect_ratio: Optional[str]) -> str:
-        """Compose the Bing image search URL with optional aspect filter."""
+        """Compose the Bing image search URL with optional aspect + site filters.
+
+        Bing chains multiple ``qft`` filters with ``+`` separators:
+        ``&qft=+filterui:aspect-Wide+site:pixabay.com``. The leading ``+``
+        is required by Bing's URL parser; subsequent filters are joined
+        with ``+`` so the whole ``qft`` value stays in one query param.
+        """
         url = f"{self.base_url}/images/search?q={quote(query)}&form=HDRSC2"
+        qft_parts: List[str] = []
         aspect_filter = _ASPECT_TO_BING_FILTER.get(aspect_ratio or "")
         if aspect_filter:
-            # &qft=+filterui:aspect-Wide is Bing's URL-level aspect filter.
-            url += f"&qft=+filterui:aspect-{aspect_filter}"
+            qft_parts.append(f"filterui:aspect-{aspect_filter}")
+        if self.site_filter:
+            qft_parts.append(f"site:{self.site_filter}")
+        if qft_parts:
+            url += "&qft=+" + "+".join(qft_parts)
         return url

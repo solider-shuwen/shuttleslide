@@ -94,15 +94,16 @@ _REFERENCED_DEFS_TAGS = frozenset(
         # standard icon system used across the pipeline.
         "use",
         # Filter container + primitives parsed by
-        # drawingml_styles._parse_filter_params. feTurbulence /
-        # feDisplacementMap / feComposite / feBlend / feColorMatrix /
-        # feComponentTransfer / feImage / lighting primitives /
-        # feMerge / feMergeNode are intentionally excluded —
-        # _parse_filter_params silently drops them, so emitting them
-        # would produce a misleading PPTX. (feMerge / feMergeNode are
-        # syntactically valid SVG compositing primitives but the
-        # vendored converter does not implement the compositing semantics
-        # — it only extracts shadow / glow / offset parameters.)
+        # drawingml_styles._parse_filter_params. _parse_filter_params
+        # extracts shadow params from feDropShadow / feGaussianBlur /
+        # feOffset / feFlood / feFuncA; everything else it iterates over
+        # is silently skipped.
+        #
+        # Truly unsupported primitives stay excluded — they describe
+        # effects the converter has no DrawingML equivalent for, so
+        # emitting them WOULD be misleading: feTurbulence / feDisplacementMap
+        # / feComposite / feBlend / feColorMatrix / feImage / lighting
+        # primitives / feMorphology.
         "filter",
         "feDropShadow",
         "feGaussianBlur",
@@ -116,11 +117,42 @@ _REFERENCED_DEFS_TAGS = frozenset(
     }
 )
 
+# Container / compositor tags that the vendored converter does NOT
+# explicitly dispatch on (so they don't appear in its source as string
+# literals), but safely passes through via .iter() walks. Allowed in the
+# validator because they're structural parts of textbook SVG1.1 filter
+# chains — excluding them forces the LLM off the most natural SVG
+# drop-shadow pattern. Drift detection in test_svg_externalization.py
+# skips this set (the "appears in vendored source" heuristic doesn't
+# apply to implicitly-handled tags).
+#
+#   - feComponentTransfer is the standard container for feFuncA
+#     (LLM writes <feComponentTransfer><feFuncA .../></feComponentTransfer>;
+#     the converter's .iter() walk still finds the feFuncA child).
+#   - feMerge / feMergeNode are the canonical "compose shadow behind
+#     SourceGraphic" step of an SVG1.1 drop-shadow chain:
+#       <feGaussianBlur in="SourceAlpha" .../>
+#       <feOffset .../>
+#       <feComponentTransfer><feFuncA .../></feComponentTransfer>
+#       <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+#     For this pattern, dropping feMerge produces an outerShdw that is
+#     visually equivalent — feMerge's only job here is "stack shadow
+#     layer behind original", which is exactly what DrawingML
+#     <a:outerShdw> renders by default.
+_SILENTLY_PASSTHROUGH_DEFS_TAGS = frozenset(
+    {
+        "feComponentTransfer",
+        "feMerge",
+        "feMergeNode",
+    }
+)
+
 _SUPPORTED_SVG_TAGS = (
     (frozenset(_VENDORED_CONVERTERS.keys()) - _CONVERTER_TAGS_FORBIDDEN)
     | _VENDORED_NON_VISUAL_TAGS
     | _VENDORED_SUPPORTED_CHILDREN
     | _REFERENCED_DEFS_TAGS
+    | _SILENTLY_PASSTHROUGH_DEFS_TAGS
 )
 
 # Cap SVG markup size as a sanity guard against runaway LLM output. This
@@ -147,6 +179,135 @@ _VIEWBOX_RE = re.compile(
     r"""viewbox\s*=\s*["']\s*([-0-9.eE+]+)\s+([-0-9.eE+]+)\s+([-0-9.eE+]+)\s+([-0-9.eE+]+)\s*["']""",
     re.IGNORECASE,
 )
+
+
+def validate_svg_for_slot(svg: str, spec: Dict[str, Any]) -> Optional[str]:
+    """Return an error string if ``svg`` fails validation for ``spec``, else None.
+
+    Pure function — no state, no ctx, no I/O. The validation logic is
+    shared between the ``set_svg`` tool (svg_tools.py) and the review
+    SvgEditor (PR3). Keeping it pure lets the editor validate user-pasted
+    or LLM-revised SVGs without needing the full pipeline context.
+
+    ``spec`` must contain:
+      - ``slot_id``: str — the slot this SVG belongs to (validated against
+        root ``<svg id>`` and ``data-slot`` attributes).
+      - ``aspect_ratio``: str — one of ``_ASPECT_VIEWBOX`` keys. Empty
+        string skips the viewBox match check (legacy payloads loaded
+        from disk before aspect_ratio was persisted).
+      - ``description``: str (optional) — used in the ``<desc>`` error
+        hint when the SVG is missing one.
+
+    Returns ``None`` on success. The caller can trust that the SVG is
+    well-formed XML, has the right root id/data-slot/viewBox, contains
+    only supported tags, and has a ``<desc>`` as its first child.
+    """
+    if not isinstance(svg, str) or not svg.strip():
+        return "svg must be a non-empty string"
+    if len(svg) > _MAX_SVG_LEN:
+        return (
+            f"svg too large ({len(svg)} chars > {_MAX_SVG_LEN}); simplify the drawing"
+        )
+
+    # XML well-formedness.
+    try:
+        root = ET.fromstring(svg)
+    except ET.ParseError as exc:
+        return f"svg is not well-formed XML: {exc}"
+
+    # Root tag must be <svg>.
+    tag = root.tag
+    if tag.startswith("{"):
+        tag = tag.split("}", 1)[1]
+    if tag != "svg":
+        return f"root element must be <svg> (got <{tag}>)"
+
+    # Required attributes on root — id and data-slot must equal slot_id.
+    slot_id = spec["slot_id"]
+    root_id = root.get("id")
+    if root_id != slot_id:
+        return f"root <svg id> must be {slot_id!r} (got {root_id!r})"
+    root_data_slot = root.get("data-slot")
+    if root_data_slot != slot_id:
+        return f"root <svg data-slot> must be {slot_id!r} (got {root_data_slot!r})"
+
+    # viewBox must match aspect_ratio (skipped when aspect_ratio is empty —
+    # legacy payloads loaded from disk before the field was persisted).
+    aspect = spec.get("aspect_ratio", "")
+    if aspect:
+        if aspect not in _ASPECT_VIEWBOX:
+            return (
+                f"unknown aspect_ratio {aspect!r}; expected one of "
+                f"{sorted(_ASPECT_VIEWBOX.keys())}"
+            )
+        expected_viewbox = _ASPECT_VIEWBOX[aspect]
+        viewbox_attr = root.get("viewBox") or root.get("viewbox")
+        if not viewbox_attr:
+            return (
+                f"root <svg> must declare viewBox (expected {expected_viewbox!r} "
+                f"for aspect_ratio {aspect!r})"
+            )
+        normalised = " ".join(viewbox_attr.split())
+        if normalised != expected_viewbox:
+            return (
+                f"root <svg viewBox> must be {expected_viewbox!r} for "
+                f"aspect_ratio {aspect!r} (got {normalised!r})"
+            )
+    else:
+        expected_viewbox = ""  # legacy path — viewBox check skipped
+
+    # Reject full-bleed background rects (would mask the slide background).
+    if expected_viewbox:
+        vb_parts = expected_viewbox.split()
+        vb_w, vb_h = float(vb_parts[2]), float(vb_parts[3])
+        full_bleed_fill = _has_full_bleed_bg_rect(root, vb_w, vb_h)
+        if full_bleed_fill is not None:
+            return (
+                f"svg contains a full-bleed background rect (fill="
+                f"{full_bleed_fill!r}) matching the viewBox dimensions "
+                f"({vb_w:g}x{vb_h:g}). The SVG is composited on top of the "
+                f"slide background and would mask it. Make the SVG transparent; "
+                f"if the image needs a LOCAL panel background, size the rect "
+                f"to the panel, not the viewBox."
+            )
+
+    # Walk the tree and reject unsupported tags (skip the root <svg>).
+    unsupported = _collect_unsupported_tags(root)
+    if unsupported:
+        preview = ", ".join(sorted(unsupported)[:8])
+        suffix = "" if len(unsupported) <= 8 else f", +{len(unsupported) - 8} more"
+        return (
+            f"unsupported SVG element(s): {preview}{suffix}. "
+            f"Allowed: {', '.join(sorted(_SUPPORTED_SVG_TAGS))}. "
+            f"filter, pattern, clipPath, linearGradient, radialGradient, "
+            f"marker live inside <defs> and are referenced via url(#...)."
+        )
+
+    # Reject forbidden substrings (XSS / animation / raster fallback).
+    forbidden_substrings = (
+        "<image",
+        "<foreignObject",
+        "<script",
+        "<style",
+        "<animate",
+        "<animateTransform",
+        "<animateMotion",
+        "<set ",
+    )
+    lowered = svg.lower()
+    for needle in forbidden_substrings:
+        if needle.lower() in lowered:
+            return (
+                f"svg contains forbidden element near {needle!r}; only static "
+                f"vector shapes are allowed"
+            )
+
+    # <desc> as first child — required for self-describing SVGs.
+    desc_err = _validate_desc_tag(root, spec.get("description", ""))
+    if desc_err is not None:
+        return desc_err
+
+    return None
 
 
 @tool(
@@ -182,121 +343,14 @@ async def set_svg(params: Dict[str, Any], ctx: Dict[str, Any]) -> ToolResult:
         )
 
     svg = params.get("svg")
-    if not isinstance(svg, str) or not svg.strip():
-        return ToolResult.failure("svg must be a non-empty string")
-    if len(svg) > _MAX_SVG_LEN:
-        return ToolResult.failure(
-            f"svg too large ({len(svg)} chars > {_MAX_SVG_LEN}); simplify the drawing"
-        )
-
-    # Validate XML + structure.
-    try:
-        root = ET.fromstring(svg)
-    except ET.ParseError as exc:
-        return ToolResult.failure(f"svg is not well-formed XML: {exc}")
-
-    tag = root.tag
-    if tag.startswith("{"):
-        tag = tag.split("}", 1)[1]
-    if tag != "svg":
-        return ToolResult.failure(
-            f"root element must be <svg> (got <{tag}>)"
-        )
-
-    # Required attributes on root.
-    slot_id = spec["slot_id"]
-    root_id = root.get("id")
-    if root_id != slot_id:
-        return ToolResult.failure(
-            f"root <svg id> must be {slot_id!r} (got {root_id!r})"
-        )
-    root_data_slot = root.get("data-slot")
-    if root_data_slot != slot_id:
-        return ToolResult.failure(
-            f"root <svg data-slot> must be {slot_id!r} (got {root_data_slot!r})"
-        )
-
-    # viewBox must match the aspect_ratio declared in the spec.
-    aspect = spec["aspect_ratio"]
-    expected_viewbox = _ASPECT_VIEWBOX[aspect]
-    viewbox_attr = root.get("viewBox") or root.get("viewbox")
-    if not viewbox_attr:
-        return ToolResult.failure(
-            f"root <svg> must declare viewBox (expected {expected_viewbox!r} "
-            f"for aspect_ratio {aspect!r})"
-        )
-    # Normalise whitespace and compare.
-    normalised = " ".join(viewbox_attr.split())
-    if normalised != expected_viewbox:
-        return ToolResult.failure(
-            f"root <svg viewBox> must be {expected_viewbox!r} for "
-            f"aspect_ratio {aspect!r} (got {normalised!r})"
-        )
-
-    # Reject full-bleed background rects. SVG composites on the slide
-    # background, so a rect matching the viewBox masks the slide. Local
-    # panel backgrounds (rect smaller than viewBox) are allowed.
-    vb_parts = expected_viewbox.split()
-    vb_w, vb_h = float(vb_parts[2]), float(vb_parts[3])
-    full_bleed_fill = _has_full_bleed_bg_rect(root, vb_w, vb_h)
-    if full_bleed_fill is not None:
-        return ToolResult.failure(
-            f"svg contains a full-bleed background rect (fill="
-            f"{full_bleed_fill!r}) matching the viewBox dimensions "
-            f"({vb_w:g}x{vb_h:g}). The SVG is composited on top of the "
-            f"slide background and would mask it. Make the SVG transparent; "
-            f"if the image needs a LOCAL panel background, size the rect "
-            f"to the panel, not the viewBox."
-        )
-
-    # Walk the tree and reject unsupported tags. Skip the root <svg>
-    # element itself — we already validated it above; including it in
-    # the walk would falsely flag "svg" as unsupported.
-    unsupported = _collect_unsupported_tags(root)
-    if unsupported:
-        preview = ", ".join(sorted(unsupported)[:8])
-        suffix = "" if len(unsupported) <= 8 else f", +{len(unsupported) - 8} more"
-        return ToolResult.failure(
-            f"unsupported SVG element(s): {preview}{suffix}. "
-            f"Allowed: {', '.join(sorted(_SUPPORTED_SVG_TAGS))}. "
-            f"filter, pattern, clipPath, linearGradient, radialGradient, "
-            f"marker live inside <defs> and are referenced via url(#...)."
-        )
-
-    # Reject <image>, <foreignObject>, <script>, <style>, animations even
-    # if they somehow appear inside an allowed parent (defensive — the
-    # slide_tools.py free-form HTML sanitizer also rejects <style> globally).
-    forbidden_substrings = (
-        "<image",
-        "<foreignObject",
-        "<script",
-        "<style",
-        "<animate",
-        "<animateTransform",
-        "<animateMotion",
-        "<set ",
-    )
-    lowered = svg.lower()
-    for needle in forbidden_substrings:
-        if needle.lower() in lowered:
-            return ToolResult.failure(
-                f"svg contains forbidden element near {needle!r}; only static "
-                f"vector shapes are allowed"
-            )
-
-    # Require a non-empty <desc> as the first child of <svg>. The <desc>
-    # carries the image's natural-language description so that:
-    #   (a) the SVG is self-describing once html_to_pptx inlines it back
-    #       into the slide HTML (browser a11y tree, downstream LLM reads
-    #       of the DOM during Phase 3 round-trip editing);
-    #   (b) HTML files referencing svgs/*.svg remain standalone-debuggable
-    #       — opening the .svg in a browser or text editor shows what it
-    #       depicts without reading paths.
-    desc_err = _validate_desc_tag(root, spec.get("description", ""))
-    if desc_err is not None:
-        return ToolResult.failure(desc_err)
+    # Delegate all structural validation to the shared pure function so
+    # the review SvgEditor (PR3) enforces the exact same checks.
+    err = validate_svg_for_slot(svg, spec)
+    if err is not None:
+        return ToolResult.failure(err)
 
     slide_idx = spec["slide_idx"]
+    slot_id = spec["slot_id"]
 
     # Persist the SVG to disk so its bytes stay out of the slide-builder
     # LLM context (saves ~1200 tokens/image) and out of the 12000-char
@@ -326,12 +380,24 @@ async def set_svg(params: Dict[str, Any], ctx: Dict[str, Any]) -> ToolResult:
     # The "data" field is retained so html_to_pptx (or any other inliner)
     # can inline without re-reading the file, but it never enters an LLM
     # prompt: _format_images_block renders only the path + description.
+    # ``aspect_ratio`` is persisted so PR3's SvgEditor can re-validate
+    # user edits without reverse-looking-up the viewBox. Legacy state
+    # files (pre-PR3) lack this field; load_state defaults it to "".
+    # ``width`` / ``height`` come from the viewBox (already validated
+    # above against ``_ASPECT_VIEWBOX[aspect]`` for non-empty aspect
+    # ratios) so raster and vector payloads expose the same dimension
+    # fields. Fallback ``(0, 0)`` only fires for malformed SVG markup
+    # that slipped past validation — the dimensions are best-effort.
+    svg_w, svg_h = _parse_svg_dimensions(svg)
     state.slide_images.setdefault(slide_idx, {})[slot_id] = {
         "type": "svg_file",
         "path": rel_path,
         "data": svg,
         "description": spec.get("description", ""),
         "image_type": spec.get("image_type", "illustration"),
+        "aspect_ratio": spec.get("aspect_ratio", ""),
+        "width": svg_w,
+        "height": svg_h,
         "mime": "image/svg+xml",
         "meta": {
             "source_type": spec.get("source_type", "svg"),
@@ -340,10 +406,63 @@ async def set_svg(params: Dict[str, Any], ctx: Dict[str, Any]) -> ToolResult:
             "attempts": 1,
         },
     }
+    aspect = spec.get("aspect_ratio", "")
+    expected_viewbox = _ASPECT_VIEWBOX.get(aspect, "(unknown)")
     return ToolResult.success(
         f"svg stored for slide {slide_idx} slot {slot_id!r} "
         f"({len(svg)} chars → {rel_path}, viewBox={expected_viewbox!r})"
     )
+
+
+def _parse_svg_dimensions(svg: str) -> tuple[int, int]:
+    """Extract ``(width, height)`` from an SVG's viewBox or root attrs.
+
+    Tries, in order:
+
+      1. ``viewBox`` attribute on the root ``<svg>`` — the canonical
+         source. Format ``"minX minY W H"``; we read the last two ints.
+      2. ``width`` / ``height`` attributes on the root ``<svg>`` (some
+         hand-authored SVGs skip viewBox).
+      3. ``_ASPECT_VIEWBOX[aspect_ratio]`` lookup via the spec, when
+         the markup itself has neither. (Caller passes None here —
+         aspect-ratio fallback is the caller's responsibility.)
+
+    Returns ``(0, 0)`` on any parse failure. Best-effort: dimensions
+    are surfaced for parity with the raster image payload, not used
+    for layout decisions (the validated viewBox above already covers
+    layout correctness).
+    """
+    import re
+
+    if not svg:
+        return 0, 0
+    # ViewBox: "0 0 W H" (whitespace-separated). Tolerate commas and
+    # extra spaces; grab the trailing two numbers.
+    vb_match = re.search(
+        r"<svg\b[^>]*\bviewBox\s*=\s*[\"']\s*[\d.,\-eE\s]+[\"']",
+        svg,
+        re.IGNORECASE,
+    )
+    if vb_match:
+        nums = re.findall(r"-?\d+(?:\.\d+)?", vb_match.group(0))
+        if len(nums) >= 2:
+            try:
+                return int(float(nums[-2])), int(float(nums[-1]))
+            except (ValueError, IndexError):
+                pass
+    # Fallback: width / height attributes. Strip ``px`` / ``%`` suffixes.
+    w_match = re.search(
+        r"<svg\b[^>]*\bwidth\s*=\s*[\"']\s*(\d+(?:\.\d+)?)", svg, re.IGNORECASE
+    )
+    h_match = re.search(
+        r"<svg\b[^>]*\bheight\s*=\s*[\"']\s*(\d+(?:\.\d+)?)", svg, re.IGNORECASE
+    )
+    if w_match and h_match:
+        try:
+            return int(float(w_match.group(1))), int(float(h_match.group(1)))
+        except ValueError:
+            pass
+    return 0, 0
 
 
 def _persist_svg_markup(

@@ -9,10 +9,27 @@
    template only wraps the LLM-written fragment in the .ppt-slide box and
    applies the slide background.
 
+   Background strategy is selected via slots.background.strategy (set by
+   the `set_slide_background` tool) and rendered here against the live
+   theme — the slot never snapshots theme colors, so theme edits propagate
+   to every slide on the next render without re-running the LLM.
+
    Slots:
-     html: str  (sanitized HTML fragment written by the LLM)
+     html: str  (sanitized HTML fragment written by the LLM, with
+                 {{theme.*}} placeholders already substituted by
+                 SlideHTMLRenderer.render_slide before this template runs)
+     background: {strategy: str, image_url?: str}  (optional)
 #}
-<div class="ppt-slide overflow-hidden box-border"
-     style="background: {% if slots.background and slots.background.color %}{{ slots.background.color }}{% else %}{{ theme.bg_color }}{% endif %}">
+{% set bg = slots.background or {"strategy": "solid"} %}
+<div class="ppt-slide overflow-hidden box-border" style="background:
+{%- if bg.strategy == "image_overlay" %}
+  linear-gradient(rgba(0,0,0,0.55), rgba(0,0,0,0.75)), url('{{ bg.image_url }}') center/cover no-repeat
+{%- elif bg.strategy == "gradient" %}
+  linear-gradient(135deg, {{ theme.primary_color }} 0%, {{ _darken(theme.primary_color, 0.7) }} 100%)
+{%- elif bg.strategy == "geometric" %}
+  linear-gradient(135deg, {{ theme.bg_color }} 0%, {{ _accent_rgba(theme, 'primary', 0.15) }} 100%)
+{%- else %}
+  {{ theme.bg_color }}
+{%- endif %}">
     {{ slots.html|safe }}
 </div>

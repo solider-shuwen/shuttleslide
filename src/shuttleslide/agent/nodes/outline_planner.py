@@ -43,6 +43,9 @@ async def run_outline_planner(
         style_hint=state.style_hint,
         target_count=state.target_count,
         theme=state.theme,
+        user_image_library=state.user_image_library,
+        canvas_width_px=state.canvas_width_px,
+        canvas_height_px=state.canvas_height_px,
     )
     messages = [
         {"role": "system", "content": system_prompt},
@@ -144,6 +147,8 @@ async def run_structure_planner(
         style_hint=state.style_hint,
         target_count=state.target_count,
         theme=state.theme,
+        canvas_width_px=state.canvas_width_px,
+        canvas_height_px=state.canvas_height_px,
     )
     messages = [
         {"role": "system", "content": system_prompt},
@@ -260,6 +265,9 @@ async def run_slide_detail_generator(
             deck_skeleton=state.deck_skeleton,
             topic=state.topic,
             theme=state.theme,
+            user_image_library=state.user_image_library,
+            canvas_width_px=state.canvas_width_px,
+            canvas_height_px=state.canvas_height_px,
         )
         messages = [
             {"role": "system", "content": prompt},
@@ -289,6 +297,8 @@ async def run_slide_detail_generator(
                         stage="slide_detail_generator",
                         iteration=attempt + 1,
                         max_iterations=max_attempts_per_slide,
+                        slide_index=slide_index + 1,
+                        slide_total=total,
                         content=response.content,
                         reasoning=response.reasoning,
                         tool_calls=response.tool_calls,

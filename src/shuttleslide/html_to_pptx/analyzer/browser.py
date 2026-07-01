@@ -5,9 +5,9 @@ Playwright browser manager — lifecycle management for headless Chromium.
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Any, Optional
 
-from playwright.async_api import async_playwright, Browser, Page, Playwright
+from playwright.async_api import async_playwright, Browser, BrowserContext, Page, Playwright
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +23,11 @@ class BrowserManager:
         page = await mgr.new_page()
         # ... use page ...
         await mgr.stop()
+
+    For callers that need to influence how the site responds (locale /
+    user agent), use ``new_context()`` instead of ``new_page()`` — some
+    sites (notably cn.bing.com) serve different content based on these
+    headers, and the default ``new_page()`` skips them entirely.
     """
 
     def __init__(self, viewport: tuple[int, int] = DEFAULT_VIEWPORT):
@@ -59,3 +64,33 @@ class BrowserManager:
             viewport={"width": self.viewport[0], "height": self.viewport[1]},
         )
         return page
+
+    async def new_context(
+        self,
+        locale: Optional[str] = None,
+        user_agent: Optional[str] = None,
+        **extra: Any,
+    ) -> BrowserContext:
+        """Create a new browser context with optional locale / UA overrides.
+
+        Use this instead of ``new_page()`` when the target site responds
+        differently to different locales or user agents. Concrete case:
+        cn.bing.com silently ignores the ``site:`` URL filter when the
+        request carries the default ``HeadlessChrome`` UA + system locale
+        (typically ``zh-CN`` on a Chinese Windows box), so callers that
+        rely on ``site:`` (e.g. BingWebScrapeSearchProvider) must open a
+        context with ``locale="en-US"`` and a real-Chrome UA to make the
+        filter actually take effect.
+
+        Caller owns the returned context's lifecycle — close it when
+        done (typically in a ``finally`` block around ``context.new_page()``).
+        """
+        kwargs: dict[str, Any] = {
+            "viewport": {"width": self.viewport[0], "height": self.viewport[1]},
+        }
+        if locale:
+            kwargs["locale"] = locale
+        if user_agent:
+            kwargs["user_agent"] = user_agent
+        kwargs.update(extra)
+        return await self.browser.new_context(**kwargs)

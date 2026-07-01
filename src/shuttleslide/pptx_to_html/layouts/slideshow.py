@@ -19,7 +19,8 @@ class SlideshowLayout(BaseLayout):
     Only one slide is visible at a time with keyboard/mouse/touch navigation.
     """
 
-    def __init__(self, enable_animations: bool = True, use_base64: bool = False, output_dir: str = None):
+    def __init__(self, enable_animations: bool = True, use_base64: bool = False, output_dir: str = None,
+                 measurer=None):
         """
         Initialize the slideshow layout with converters and templates.
 
@@ -27,8 +28,11 @@ class SlideshowLayout(BaseLayout):
             enable_animations: Whether to enable CSS animations for slide elements
             use_base64: Whether to embed images as base64 (True) or save as separate files (False, default).
             output_dir: Directory for saving image assets relative to the output HTML.
+            measurer: Optional PlaywrightTextMeasurer (already started);
+                enables shrink-on-overflow for text shapes.  See BaseLayout
+                for lifecycle ownership.
         """
-        super().__init__(use_base64=use_base64, output_dir=output_dir)
+        super().__init__(use_base64=use_base64, output_dir=output_dir, measurer=measurer)
         self.enable_animations = enable_animations
         self.use_base64 = use_base64
 
@@ -151,7 +155,7 @@ class SlideshowLayout(BaseLayout):
             f"left: {pct['left_pct']:.3f}%",
             f"top: {pct['top_pct']:.3f}%",
             f"width: {pct['width_pct']:.3f}%",
-            f"height: {pct['height_pct']:.3f}%",
+            self._height_style_for_element(element, f"{pct['height_pct']:.3f}%"),
             f"z-index: {element.z_order}",
         ]
 
@@ -189,7 +193,7 @@ class SlideshowLayout(BaseLayout):
             f"left: {pct['left_pct']:.3f}%",
             f"top: {pct['top_pct']:.3f}%",
             f"width: {pct['width_pct']:.3f}%",
-            f"height: {pct['height_pct']:.3f}%",
+            self._height_style_for_element(element, f"{pct['height_pct']:.3f}%"),
             f"z-index: {element.z_order}",
         ]
 
@@ -342,7 +346,7 @@ class SlideshowLayout(BaseLayout):
             f"left: {pct['left_pct']:.3f}%",
             f"top: {pct['top_pct']:.3f}%",
             f"width: {pct['width_pct']:.3f}%",
-            f"height: {pct['height_pct']:.3f}%",
+            self._height_style_for_element(element, f"{pct['height_pct']:.3f}%"),
             f"z-index: {element.z_order}",
         ]
 
@@ -467,11 +471,12 @@ class SlideshowLayout(BaseLayout):
                 f"left: {child_pct['left_pct']:.3f}%",
                 f"top: {child_pct['top_pct']:.3f}%",
                 f"width: {child_pct['width_pct']:.3f}%",
-                f"height: {child_pct['height_pct']:.3f}%",
+                self._height_style_for_element(child, f"{child_pct['height_pct']:.3f}%"),
                 f"z-index: {child.z_order}",
                 "white-space: pre-wrap",
-                "overflow: hidden",
             ]
+            if self._should_clip_element(child):
+                styles.append("overflow: hidden")
             # Apply border/outline if present
             if child.line_color:
                 border_width = child.line_width if child.line_width else 1

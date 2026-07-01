@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset='UTF-8'>
+    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+    <title>Presentation Slideshow</title>
+    <style>
+        /* Base reset */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+/* Set default line-height only on containers, not all elements */
+body, .slide-container, .slide-element {
+    line-height: 1;
+}
+
+/* Body and reveal container */
+html, body {
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+}
+
+body {
+    background-color: #000;
+    font-family: 'Arial', sans-serif;
+}
+
+.reveal {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    touch-action: none;
+}
+
+.reveal .slides {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    perspective: 1000px;
+}
+
+/* Slide sections */
+.reveal section {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.5s ease-in-out, transform 0.5s ease-in-out;
+    transform: translateX(100%);
+    pointer-events: none;
+}
+
+.reveal section.present {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(0);
+    pointer-events: auto;
+    z-index: 10;
+    transform-style: preserve-3d;
+}
+
+.reveal section.past {
+    transform: translateX(-100%);
+}
+
+.reveal section.future {
+    transform: translateX(100%);
+}
+
+/* Hidden slides */
+.reveal section.hidden-slide {
+    display: none !important;
+}
+
+/* Slide container */
+.slide-container {
+    position: relative;
+    width: 1279px;
+    height: 720px;
+    margin: 0 auto;
+    background-color: white;
+    overflow: hidden;
+    transform-style: preserve-3d;
+}
+
+/* Scale slides to fit viewport */
+.reveal {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.reveal .slides {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.reveal section {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Slide elements */
+.slide-element {
+    position: absolute;
+}
+
+/* Shape wrapper styles - Critical for shape visibility */
+.shape-wrapper {
+    position: absolute;
+    display: block;
+    pointer-events: auto;
+    opacity: 1 !important;
+    visibility: visible !important;
+}
+
+.shape-svg-inner {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+/* Ensure SVG shapes are visible */
+svg.shape-svg-inner {
+    display: block;
+    opacity: 1 !important;
+    visibility: visible !important;
+    pointer-events: auto;
+}
+
+/* Ensure shapes work with animations - Override all inherited visibility properties */
+.shape-wrapper,
+.shape-wrapper svg,
+.shape-wrapper svg * {
+    opacity: 1 !important;
+    visibility: visible !important;
+}
+
+/* Multi-level bullet paragraphs */
+.bullet-paragraph {
+    display: flex;
+    align-items: baseline;
+}
+
+.bullet-paragraph .bullet {
+    flex-shrink: 0;
+    line-height: 1;
+    /* width set inline per paragraph (= PPT marL) so wrapped text aligns */
+}
+
+.bullet-paragraph .bullet img {
+    display: inline-block;
+    vertical-align: middle;
+}
+
+.bullet-paragraph .text {
+    flex-grow: 1;
+}
+
+.text-paragraph {
+    margin: 0;
+    padding: 0;
+}
+
+/* Animations */
+/* Use individual 'translate' property instead of 'transform' so that
+   element-level 3D transforms (perspective, rotateX/Y) are not overridden. */
+@keyframes slideIn {
+    from {
+        opacity: 0;
+        translate: 0 20px;
+    }
+    to {
+        opacity: 1;
+        translate: 0 0;
+    }
+}
+
+/* Controls */
+.reveal .controls {
+    position: absolute;
+    bottom: 20px;
+    right: 20px;
+    display: flex;
+    gap: 10px;
+    z-index: 1000;
+}
+
+.reveal .controls button {
+    background-color: rgba(0, 0, 0, 0.5);
+    color: white;
+    border: none;
+    border-radius: 50%;
+    width: 50px;
+    height: 50px;
+    font-size: 24px;
+    cursor: pointer;
+    transition: background-color 0.3s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.reveal .controls button:hover {
+    background-color: rgba(0, 0, 0, 0.8);
+}
+
+.reveal .controls button:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+/* Progress bar */
+.reveal .progress {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    height: 3px;
+    background-color: rgba(255, 255, 255, 0.2);
+    width: 100%;
+    z-index: 1000;
+}
+
+.reveal .progress-bar {
+    height: 100%;
+    background-color: rgba(255, 255, 255, 0.8);
+    transition: width 0.3s ease;
+}
+
+/* Slide number */
+.reveal .slide-number {
+    position: absolute;
+    bottom: 20px;
+    left: 20px;
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 14px;
+    z-index: 1000;
+}
+
+/* Responsive scaling */
+@media (max-width: 1379px) {
+    .slide-container {
+        transform: scale(0.8);
+    }
+}
+
+@media (max-width: 1023px) {
+    .slide-container {
+        transform: scale(0.6);
+    }
+}
+
+@media (max-width: 767px) {
+    .slide-container {
+        transform: scale(0.4);
+    }
+    .reveal .controls button {
+        width: 40px;
+        height: 40px;
+        font-size: 18px;
+    }
+}
+
+/* Print styles */
+@media print {
+    body {
+        height: auto;
+        overflow: visible;
+        background-color: white;
+    }
+
+    .reveal {
+        position: static;
+        height: auto;
+    }
+
+    .reveal .slides {
+        height: auto;
+        perspective: none;
+    }
+
+    .reveal section {
+        position: relative;
+        opacity: 1;
+        visibility: visible;
+        transform: none;
+        page-break-after: always;
+        margin-bottom: 20px;
+        display: block;
+    }
+
+    .slide-container {
+        margin: 0;
+        page-break-inside: avoid;
+    }
+
+    .reveal .controls,
+    .reveal .progress,
+    .reveal .slide-number {
+        display: none;
+    }
+
+    .slide-element {
+        animation: none !important;
+        opacity: 1 !important;
+    }
+}
+    </style>
+</head>
+<body>
+    <div class='reveal'>
+        <div class='slides'>
+            
+            <section data-slide-number='1'  >
+                <div class='slide-container' >
+                    
+                        <div class="slide-element text-element" style="position: absolute; left: 7.500%; top: 33.333%; width: 85.000%; min-height: 20.000%; z-index: 0; white-space: pre-wrap; font-size: 60.0pt; font-weight: bold; animation: slideIn 0.5s ease-out 0.0s both"><p style="font-size: 60.0pt; font-weight: bold; line-height: 1 !important; margin-top: 0 !important; margin-bottom: 0pt !important" class="text-paragraph" data-pptx-left="96.0" data-pptx-top="240.0" data-pptx-width="1087.9679790026246" data-pptx-height="144.0" data-pptx-z-order="0" data-pptx-font-size="60.0" data-pptx-bold="true">Shuttleslide</p></div>
+                    
+                        <div class="slide-element text-element" style="position: absolute; left: 7.500%; top: 53.333%; width: 85.000%; min-height: 13.333%; z-index: 1; white-space: pre-wrap; font-size: 28.0pt; animation: slideIn 0.5s ease-out 0.05s both"><p style="font-size: 28.0pt; line-height: 1 !important; margin-top: 0 !important; margin-bottom: 0pt !important" class="text-paragraph" data-pptx-left="96.0" data-pptx-top="384.0" data-pptx-width="1087.9679790026246" data-pptx-height="96.0" data-pptx-z-order="1" data-pptx-font-size="28.0">Bidirectional PowerPoint ↔ HTML conversion</p></div>
+                    
+                </div>
+            </section>
+            
+            <section data-slide-number='2'  >
+                <div class='slide-container' >
+                    
+                        <div class="slide-element text-element" style="position: absolute; left: 3.750%; top: 4.000%; width: 90.002%; min-height: 13.333%; z-index: 0; white-space: pre-wrap; font-size: 36.0pt; font-weight: bold; animation: slideIn 0.5s ease-out 0.0s both"><p style="font-size: 36.0pt; font-weight: bold; line-height: 1 !important; margin-top: 0 !important; margin-bottom: 0pt !important" class="text-paragraph" data-pptx-left="48.0" data-pptx-top="28.8" data-pptx-width="1152.0" data-pptx-height="96.0" data-pptx-z-order="0" data-pptx-font-size="36.0" data-pptx-bold="true">Why round-trip matters</p></div>
+                    
+                        <div class="slide-element text-element" style="position: absolute; left: 6.000%; top: 20.000%; width: 82.502%; min-height: 73.333%; z-index: 1; white-space: pre-wrap; font-size: 24.0pt; animation: slideIn 0.5s ease-out 0.05s both"><p style="font-size: 24.0pt; line-height: 1 !important; margin-top: 0 !important; margin-bottom: 0pt !important" class="text-paragraph" data-pptx-left="76.8" data-pptx-top="144.0" data-pptx-width="1056.0" data-pptx-height="528.0" data-pptx-z-order="1" data-pptx-font-size="24.0">Semantic preservation, not pixel-perfection</p>
+<p style="font-size: 24.0pt; line-height: 1 !important; margin-top: 0pt !important; margin-bottom: 0pt !important" class="text-paragraph" data-pptx-left="76.8" data-pptx-top="144.0" data-pptx-width="1056.0" data-pptx-height="528.0" data-pptx-z-order="1" data-pptx-font-size="24.0">data-pptx-* metadata threads through both directions</p>
+<p style="font-size: 18.0pt; line-height: 1 !important; margin-top: 0pt !important; margin-bottom: 0pt !important" class="text-paragraph" data-pptx-left="76.8" data-pptx-top="144.0" data-pptx-width="1056.0" data-pptx-height="528.0" data-pptx-z-order="1" data-pptx-font-size="24.0">Native DrawingML keeps slides editable in PowerPoint</p>
+<p style="font-size: 24.0pt; line-height: 1 !important; margin-top: 0pt !important; margin-bottom: 0pt !important" class="text-paragraph" data-pptx-left="76.8" data-pptx-top="144.0" data-pptx-width="1056.0" data-pptx-height="528.0" data-pptx-z-order="1" data-pptx-font-size="24.0">Empirical PPT↔CSS spacing calibration</p>
+<p style="font-size: 18.0pt; line-height: 1 !important; margin-top: 0pt !important; margin-bottom: 0pt !important" class="text-paragraph" data-pptx-left="76.8" data-pptx-top="144.0" data-pptx-width="1056.0" data-pptx-height="528.0" data-pptx-z-order="1" data-pptx-font-size="24.0">Line height, paragraph spacing, autofit shrink</p></div>
+                    
+                </div>
+            </section>
+            
+            <section data-slide-number='3'  >
+                <div class='slide-container' >
+                    
+                        <div class="slide-element text-element" style="position: absolute; left: 3.750%; top: 4.000%; width: 90.002%; min-height: 13.333%; z-index: 0; white-space: pre-wrap; font-size: 36.0pt; font-weight: bold; animation: slideIn 0.5s ease-out 0.0s both"><p style="font-size: 36.0pt; font-weight: bold; line-height: 1 !important; margin-top: 0 !important; margin-bottom: 0pt !important" class="text-paragraph" data-pptx-left="48.0" data-pptx-top="28.8" data-pptx-width="1152.0" data-pptx-height="96.0" data-pptx-z-order="0" data-pptx-font-size="36.0" data-pptx-bold="true">Capability matrix</p></div>
+                    
+                        <div class='slide-element table-element' style='position: absolute; left: 7.500%; top: 20.000%; width: 82.502%; height: 53.333%; z-index: 1; animation: slideIn 0.5s ease-out 0.05s both;'><table style="width: 100%; height: 100%; border-collapse: collapse; border: 1px solid #000" data-pptx-element-type="table" data-pptx-left="96.0" data-pptx-top="144.0" data-pptx-width="1056.0" data-pptx-height="384.0" data-pptx-z-order="1" data-pptx-rows="3" data-pptx-cols="3"><tr><td style="border: 1px solid #000; padding: 4px" data-pptx-row="0" data-pptx-col="0">Capability</td><td style="border: 1px solid #000; padding: 4px" data-pptx-row="0" data-pptx-col="1">Shuttleslide</td><td style="border: 1px solid #000; padding: 4px" data-pptx-row="0" data-pptx-col="2">Other tools</td></tr><tr><td style="border: 1px solid #000; padding: 4px" data-pptx-row="1" data-pptx-col="0">PPTX → HTML</td><td style="border: 1px solid #000; padding: 4px" data-pptx-row="1" data-pptx-col="1">Yes</td><td style="border: 1px solid #000; padding: 4px" data-pptx-row="1" data-pptx-col="2">Some</td></tr><tr><td style="border: 1px solid #000; padding: 4px" data-pptx-row="2" data-pptx-col="0">HTML → PPTX</td><td style="border: 1px solid #000; padding: 4px" data-pptx-row="2" data-pptx-col="1">Yes</td><td style="border: 1px solid #000; padding: 4px" data-pptx-row="2" data-pptx-col="2">Rare</td></tr></table></div>
+                    
+                </div>
+            </section>
+            
+        </div>
+    </div>
+    <script>
+        (function() {
+    'use strict';
+
+    let currentSlide = 0;
+    const slides = document.querySelectorAll('.reveal section');
+    const totalSlides = slides.length;
+
+    // Create UI elements
+    function createControls() {
+        const controls = document.createElement('div');
+        controls.className = 'controls';
+
+        const prevBtn = document.createElement('button');
+        prevBtn.innerHTML = '&#10094;'; // Left arrow
+        prevBtn.title = 'Previous slide';
+        prevBtn.addEventListener('click', prevSlide);
+
+        const nextBtn = document.createElement('button');
+        nextBtn.innerHTML = '&#10095;'; // Right arrow
+        nextBtn.title = 'Next slide';
+        nextBtn.addEventListener('click', nextSlide);
+
+        controls.appendChild(prevBtn);
+        controls.appendChild(nextBtn);
+        document.querySelector('.reveal').appendChild(controls);
+
+        return { prevBtn, nextBtn };
+    }
+
+    function createProgress() {
+        const progress = document.createElement('div');
+        progress.className = 'progress';
+
+        const progressBar = document.createElement('div');
+        progressBar.className = 'progress-bar';
+        progressBar.style.width = '0%';
+
+        progress.appendChild(progressBar);
+        document.querySelector('.reveal').appendChild(progress);
+
+        return progressBar;
+    }
+
+    function createSlideNumber() {
+        const slideNum = document.createElement('div');
+        slideNum.className = 'slide-number';
+        slideNum.textContent = '1 / ' + totalSlides;
+        document.querySelector('.reveal').appendChild(slideNum);
+
+        return slideNum;
+    }
+
+    function showSlide(index, direction) {
+        // Wrap around
+        if (index >= totalSlides) index = 0;
+        if (index < 0) index = totalSlides - 1;
+
+        const directionClass = direction > 0 ? 'future' : 'past';
+
+        // Update slide classes
+        slides.forEach((slide, i) => {
+            slide.classList.remove('past', 'present', 'future');
+
+            if (i < index) {
+                slide.classList.add('past');
+            } else if (i === index) {
+                slide.classList.add('present');
+            } else {
+                slide.classList.add('future');
+            }
+        });
+
+        currentSlide = index;
+
+        // Update UI
+        updateUI();
+
+        // Reset and trigger animations
+        if (window.SlideAnimations) {
+            window.SlideAnimations.reset(currentSlide);
+        }
+    }
+
+    function nextSlide() {
+        showSlide(currentSlide + 1, 1);
+    }
+
+    function prevSlide() {
+        showSlide(currentSlide - 1, -1);
+    }
+
+    function updateUI() {
+        // Update progress bar
+        const progressBar = document.querySelector('.progress-bar');
+        if (progressBar) {
+            const progress = ((currentSlide + 1) / totalSlides) * 100;
+            progressBar.style.width = progress + '%';
+        }
+
+        // Update slide number
+        const slideNum = document.querySelector('.slide-number');
+        if (slideNum) {
+            slideNum.textContent = (currentSlide + 1) + ' / ' + totalSlides;
+        }
+
+        // Update button states
+        const prevBtn = document.querySelector('.controls button:first-child');
+        const nextBtn = document.querySelector('.controls button:last-child');
+        if (prevBtn) prevBtn.disabled = currentSlide === 0;
+        if (nextBtn) nextBtn.disabled = currentSlide === totalSlides - 1;
+    }
+
+    function handleKeyPress(e) {
+        switch(e.key) {
+            case 'ArrowRight':
+            case ' ': // Space
+            case 'Enter':
+            case 'PageDown':
+                e.preventDefault();
+                nextSlide();
+                break;
+            case 'ArrowLeft':
+            case 'PageUp':
+                e.preventDefault();
+                prevSlide();
+                break;
+            case 'Home':
+                e.preventDefault();
+                showSlide(0, 1);
+                break;
+            case 'End':
+                e.preventDefault();
+                showSlide(totalSlides - 1, -1);
+                break;
+            case 'f':
+            case 'F':
+                // Toggle fullscreen
+                if (document.documentElement.requestFullscreen) {
+                    if (!document.fullscreenElement) {
+                        document.documentElement.requestFullscreen();
+                    } else {
+                        document.exitFullscreen();
+                    }
+                }
+                break;
+        }
+    }
+
+    // Touch support
+    let touchStartX = 0;
+    let touchEndX = 0;
+
+    function handleTouchStart(e) {
+        touchStartX = e.changedTouches[0].screenX;
+    }
+
+    function handleTouchEnd(e) {
+        touchEndX = e.changedTouches[0].screenX;
+        handleSwipe();
+    }
+
+    function handleSwipe() {
+        const swipeThreshold = 50;
+        const diff = touchStartX - touchEndX;
+
+        if (Math.abs(diff) > swipeThreshold) {
+            if (diff > 0) {
+                nextSlide();
+            } else {
+                prevSlide();
+            }
+        }
+    }
+
+    // Initialize
+    function init() {
+        if (slides.length === 0) return;
+
+        // Create UI elements
+        const { prevBtn, nextBtn } = createControls();
+        createProgress();
+        createSlideNumber();
+
+        // Show first slide
+        showSlide(0, 1);
+
+        // Event listeners
+        document.addEventListener('keydown', handleKeyPress);
+        document.addEventListener('touchstart', handleTouchStart, false);
+        document.addEventListener('touchend', handleTouchEnd, false);
+
+        // Mouse wheel support
+        let wheelTimeout;
+        document.addEventListener('wheel', function(e) {
+            clearTimeout(wheelTimeout);
+            wheelTimeout = setTimeout(function() {
+                if (e.deltaY > 0) {
+                    nextSlide();
+                } else if (e.deltaY < 0) {
+                    prevSlide();
+                }
+            }, 50);
+        }, { passive: true });
+    }
+
+    // Start when DOM is ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+})();
+    </script>
+</body>
+</html>

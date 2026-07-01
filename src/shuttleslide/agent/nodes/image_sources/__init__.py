@@ -6,6 +6,7 @@ Public API:
     BingWebScrapeSearchProvider / StubImageSearchProvider: implementations.
     make_search_provider: factory keyed by provider name.
     VLMVerifier: judges whether a fetched image matches a description.
+    VLMDescriber: produces a short description for an image (upload path).
     capture_url_screenshot: playwright screenshot for URL source_refs.
 """
 
@@ -13,6 +14,7 @@ from shuttleslide.agent.nodes.image_sources.acquire import acquire_web_image
 from shuttleslide.agent.nodes.image_sources.bing_web import (
     BingWebScrapeSearchProvider,
 )
+from shuttleslide.agent.nodes.image_sources.describer import VLMDescriber
 from shuttleslide.agent.nodes.image_sources.screenshot import capture_url_screenshot
 from shuttleslide.agent.nodes.image_sources.search import (
     ImageCandidate,
@@ -30,5 +32,6 @@ __all__ = [
     "ImageSearchProvider",
     "StubImageSearchProvider",
     "make_search_provider",
+    "VLMDescriber",
     "VLMVerifier",
 ]

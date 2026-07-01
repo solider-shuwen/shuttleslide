@@ -83,6 +83,7 @@ class PPTXParser(
         # Extract master-level text styles (per-master cache)
         self.master_title_styles: Dict[int, MasterTextStyle] = {}
         self.master_body_styles: Dict[int, MasterTextStyle] = {}
+        self.master_other_styles: Dict[int, MasterTextStyle] = {}
         self._master_text_styles_cache: Dict[int, tuple] = {}  # keyed by id(master)
 
         # Current slide's master reference (set per-slide during parsing)

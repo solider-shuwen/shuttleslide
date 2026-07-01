@@ -64,6 +64,13 @@ class StageContext:
     ``Any``-typed because importing their concrete types would pull in
     optional deps (Playwright, httpx clients) — stages that care about
     the shape should isinstance-check at run time.
+
+    ``broadcaster`` is the review/UI event channel (typically a
+    ``Broadcaster`` instance from the orchestrator). Stages with
+    long-running non-LLM work (e.g. video render) call
+    ``ctx.broadcaster.emit_stage_progress(...)`` to drive UI progress
+    bars. ``None`` when running outside a review context (CLI batch,
+    tests) — stages must guard with ``if ctx.broadcaster is not None``.
     """
 
     state: "AgentState"
@@ -78,6 +85,7 @@ class StageContext:
     web_search_provider: Any = None
     vlm_verifier: Any = None
     browser_manager: Any = None
+    broadcaster: Any = None
 
 
 class Stage(Protocol):
@@ -156,3 +164,33 @@ class StageBase:
         """Default: not a terminal stage. Only one stage per pipeline
         should override this to return an ``OrchestratorResult``."""
         return None
+
+    async def regenerate_item(
+        self,
+        ctx: StageContext,
+        target_id: str,
+        *,
+        mode: Literal["incremental", "fresh"] = "incremental",
+    ) -> None:
+        """Per-item regeneration entry point.
+
+        Override to support the review pipeline's "Update this slide"
+        / "Update this image" affordances. ``target_id`` follows the
+        :class:`StaleMark` ID grammar (``"all"`` / ``"slide:N"`` /
+        ``"slide:N:slot:ID"``).
+
+        ``mode="incremental"`` (default) preserves the user's manual
+        edits by passing current value + upstream diff to the LLM.
+        ``mode="fresh"`` regenerates from scratch (used when the user
+        explicitly chooses "from zero"). The default value of
+        ``mode`` matches the WS protocol default so callers that
+        forget to pass it get the safer behaviour.
+
+        Default raises :class:`NotImplementedError` — stages that
+        don't support per-item regenerate (e.g. theme, outline — they
+        are sources, not regeneratable) keep the base behaviour, and
+        the coordinator surfaces the error as an ``EditRejectedMsg``.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support per-item regenerate"
+        )

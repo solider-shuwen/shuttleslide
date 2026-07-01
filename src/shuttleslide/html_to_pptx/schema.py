@@ -361,12 +361,21 @@ ELEMENT_TYPES = {
 
 @dataclass
 class ThemeDef:
-    """Global theme extracted from the HTML."""
+    """Global theme extracted from the HTML.
+
+    Fields align with the ``define_theme`` tool and ``THEME_DESIGNER_PROMPT``
+    so nothing the LLM emits is silently dropped when ``state.theme`` (a
+    plain dict) is coerced into this dataclass for rendering. The slide
+    HTML references these via ``{{theme.<field>}}`` placeholders (see
+    ``agent/theme_tokens.py``); keeping the field list in sync is what
+    makes the placeholders resolve at render time.
+    """
     primary_color: str = "#133EFF"
     accent_color: str = "#00CD82"
     warn_color: str = "#FF5722"
     bg_color: str = "#FEFEFE"
     text_color: str = "#1F2937"
+    title_color: str = "#133EFF"
     font_title: str = "Roboto"
     font_body: str = "Roboto"
 

@@ -18,7 +18,7 @@ State file shape
 ----------------
 ```json
 {
-  "version": 2,
+  "version": 3,
   "saved_at": 1718000000.0,
   "topic": "...",
   "style_hint": "cute",
@@ -32,6 +32,7 @@ State file shape
   "slides": [{"layout": "free_form", "slots": {"html": "..."}}],
   "html_paths": [...],
   "stage_outputs": {"script": {...}, "voiceover": {...}},
+  "stale_marks": {"slides": [{"target_id": "slide:1", ...}]},
   "warnings": [],
   "errors": []
 }
@@ -42,6 +43,9 @@ Version history:
   - v2: adds ``stage_outputs`` (the only sanctioned extension channel
     for pro / extension stages; see AgentState). v1 files load with
     ``stage_outputs={}`` — no migration needed.
+  - v3: adds ``stale_marks`` (downstream stale markers from the review
+    pipeline). v1/v2 files load with ``stale_marks={}`` — no migration
+    needed.
 
 Not persisted: ``current_svg_spec`` and ``current_slide_messages`` are
 scratch fields that don't carry meaning across runs.
@@ -73,7 +77,7 @@ from shuttleslide.html_to_pptx.schema import (
 )
 
 
-_STATE_VERSION = 2
+_STATE_VERSION = 3
 
 
 def save_state(state: AgentState, path: Path) -> None:
@@ -104,6 +108,10 @@ def save_state(state: AgentState, path: Path) -> None:
         # Extension stage outputs (script / voiceover / etc.) — v2.
         # Stored as-is; values must already be JSON-safe.
         "stage_outputs": dict(state.stage_outputs),
+        # Stale markers (v3) — already a JSON-safe dict (StaleMark.to_dict
+        # shape). Defensive copy so a later in-memory mutation doesn't
+        # leak into the saved file.
+        "stale_marks": {stage: list(marks) for stage, marks in state.stale_marks.items()},
         "warnings": list(state.warnings),
         "errors": list(state.errors),
     }
@@ -147,6 +155,10 @@ def load_state(path: Path) -> AgentState:
         html_paths=list(payload.get("html_paths", [])),
         # v2 field — older v1 files don't have this; default to {}.
         stage_outputs=dict(payload.get("stage_outputs", {}) or {}),
+        # v3 field — older files (v1/v2) don't have this; default to {}.
+        # The dict shape is preserved verbatim; StaleStore.from_dict
+        # handles malformed entries defensively on use.
+        stale_marks=dict(payload.get("stale_marks", {}) or {}),
         warnings=list(payload.get("warnings", [])),
         errors=list(payload.get("errors", [])),
     )

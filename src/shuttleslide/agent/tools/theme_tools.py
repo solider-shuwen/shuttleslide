@@ -11,6 +11,39 @@ from typing import Any, Dict
 from shuttleslide.agent.tools.registry import ToolResult, tool
 
 
+# ---------------------------------------------------------------------------
+# WCAG 2.1 contrast math — used to reject themes where text/title would be
+# unreadable on the chosen background. See ECMA-376 / W3C WCAG 2.1 §1.4.3.
+# Returns ratio in [1.0, 21.0]. AA thresholds: 4.5:1 body, 3.0:1 large text.
+# ---------------------------------------------------------------------------
+
+
+def _relative_luminance(hex_str: str) -> float:
+    """sRGB hex → relative luminance (0.0 = black, 1.0 = white)."""
+    h = hex_str.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    r, g, b = (int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+
+    def _channel(c: float) -> float:
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+
+    return 0.2126 * _channel(r) + 0.7152 * _channel(g) + 0.0722 * _channel(b)
+
+
+def _contrast_ratio(fg: str, bg: str) -> float:
+    """WCAG contrast ratio between two hex colors. Range 1.0–21.0."""
+    l_fg = _relative_luminance(fg)
+    l_bg = _relative_luminance(bg)
+    lighter, darker = max(l_fg, l_bg), min(l_fg, l_bg)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+# WCAG AA thresholds. title is treated as large text (≥ 3:1); body as normal (≥ 4.5:1).
+_TITLE_MIN_CONTRAST = 3.0
+_TEXT_MIN_CONTRAST = 4.5
+
+
 @tool(
     name="define_theme",
     description=(
@@ -22,27 +55,27 @@ from shuttleslide.agent.tools.registry import ToolResult, tool
         "properties": {
             "primary_color": {
                 "type": "string",
-                "description": "Main brand color, hex like #133EFF. Used for titles, bars, primary accents.",
+                "description": "Main brand color, 6-digit hex (#RRGGBB). Used for titles, bars, primary accents. Pick a color that fits the style hint; do NOT reuse any example value verbatim.",
             },
             "accent_color": {
                 "type": "string",
-                "description": "Secondary highlight color (e.g. #00CD82). Icons, dividers, key data.",
+                "description": "Secondary highlight color (#RRGGBB). Icons, dividers, key data.",
             },
             "warn_color": {
                 "type": "string",
-                "description": "Alert color (e.g. #FF5722). Used sparingly.",
+                "description": "Alert color (#RRGGBB). Used sparingly.",
             },
             "bg_color": {
                 "type": "string",
-                "description": "Default slide background. Light decks: #FEFEFE; dark decks: #0a0e27.",
+                "description": "Default slide background. Light decks: near-white; dark decks: near-black.",
             },
             "text_color": {
                 "type": "string",
-                "description": "Default body text color. Must contrast with bg_color.",
+                "description": "Default body text color. Must contrast with bg_color at WCAG AA (>= 4.5:1) or the tool rejects it.",
             },
             "title_color": {
                 "type": "string",
-                "description": "Title text color. Often white for dark decks, primary_color for light decks.",
+                "description": "Title text color. Must contrast with bg_color at WCAG AA (>= 3:1 for large text). White/near-white for dark decks, primary_color or dark for light decks.",
             },
             "font_title": {
                 "type": "string",
@@ -113,6 +146,28 @@ async def define_theme(params: Dict[str, Any], ctx: Dict[str, Any]) -> ToolResul
                 f"{color_field} must be a hex color (e.g. #00D4FF), got {val!r}"
             )
         params[color_field] = f"#{cleaned}"
+
+    # WCAG AA contrast gate — reject themes whose title/body text would be
+    # illegible on bg_color. Forces the LLM to retry instead of silently
+    # shipping dark-on-dark or light-on-light slides. Note: this only
+    # checks text against bg_color; cover slides that render text on a
+    # primary_color gradient may still need per-slide contrast review.
+    title_ratio = _contrast_ratio(params["title_color"], params["bg_color"])
+    if title_ratio < _TITLE_MIN_CONTRAST:
+        return ToolResult.failure(
+            f"title_color {params['title_color']} on bg_color "
+            f"{params['bg_color']} has contrast {title_ratio:.2f}:1 "
+            f"(need >= {_TITLE_MIN_CONTRAST}:1, WCAG AA for large text). "
+            f"Use white or near-white for dark decks; a dark color for light decks."
+        )
+    text_ratio = _contrast_ratio(params["text_color"], params["bg_color"])
+    if text_ratio < _TEXT_MIN_CONTRAST:
+        return ToolResult.failure(
+            f"text_color {params['text_color']} on bg_color "
+            f"{params['bg_color']} has contrast {text_ratio:.2f}:1 "
+            f"(need >= {_TEXT_MIN_CONTRAST}:1, WCAG AA for body text). "
+            f"Pick a color with higher contrast against the background."
+        )
 
     # Store the full dict on the state.
     state.theme = dict(params)

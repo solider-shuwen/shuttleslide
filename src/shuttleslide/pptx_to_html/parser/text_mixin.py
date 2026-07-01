@@ -19,6 +19,51 @@ from shuttleslide.pptx_to_html.utils.units import emu_to_pt, emu_to_px, angle_to
 class TextMixin:
     """Text element parsing methods for placeholders and text boxes."""
 
+    @staticmethod
+    def _detect_autofit(body_pr, ns):
+        """Inspect <a:bodyPr> for the autofit-mode child element.
+
+        OpenXML defines three mutually exclusive children that control how a
+        text frame reacts when its content doesn't fit the shape box:
+
+          - <a:spAutoFit/>   — shape grows to fit the text (soft height)
+          - <a:normAutofit fontScale="..." lnSpcReduction="..."/> — text is
+                              shrunk so it fits the box; fontScale is in
+                              1/1000 of a percent (100000 = 100%)
+          - <a:noAutofit/>   — text overflows the box (clipped in our renderer)
+
+        PPT's effective default when none of the three is present is
+        noAutofit (per ECMA-376).
+
+        Returns:
+            (mode: str, fontScale: Optional[str]) — the fontScale string is
+            returned raw (still in PPT units) so callers can decide whether
+            and how to apply it; None for non-normAutofit modes.
+        """
+        if body_pr is None:
+            return "noAutofit", None
+        if body_pr.find("a:spAutoFit", ns) is not None:
+            return "spAutoFit", None
+        norm = body_pr.find("a:normAutofit", ns)
+        if norm is not None:
+            return "normAutofit", norm.get("fontScale")
+        return "noAutofit", None
+
+    @staticmethod
+    def _build_text_box_metadata(scene3d_camera, autofit_mode, autofit_fontScale):
+        """Build metadata dict for a text-box element.
+
+        Always carries 'autofit' so layout code can branch on it; carries
+        'scene3d_camera' / 'normAutofit_fontScale' only when relevant so we
+        don't pollute every element with None values.
+        """
+        metadata = {"autofit": autofit_mode}
+        if scene3d_camera:
+            metadata["scene3d_camera"] = scene3d_camera
+        if autofit_fontScale is not None:
+            metadata["normAutofit_fontScale"] = autofit_fontScale
+        return metadata
+
     def _parse_placeholder(
         self, shape, left: float, top: float, width: float, height: float, z_order: int
     ) -> TextElement:
@@ -29,6 +74,24 @@ class TextMixin:
         if hasattr(shape, "text_frame") and shape.text_frame:
             text_frame = shape.text_frame
             text = sanitize_pptx_text(text_frame.text)  # Sanitize for backward compatibility
+
+            # Determine placeholder type once — it picks master titleStyle
+            # vs bodyStyle for every paragraph in this shape. Previously this
+            # was computed AFTER the paragraph loop, which made the cascade
+            # comment "override body with title styles once is_title is known"
+            # impossible to honor — ctrTitle silently picked up bodyStyle.
+            ph_type = None
+            if hasattr(shape, "placeholder_format") and shape.placeholder_format:
+                try:
+                    ph_type = int(shape.placeholder_format.type)
+                except (TypeError, ValueError):
+                    ph_type = shape.placeholder_format.type
+            # PowerPoint PP_PLACEHOLDER enum: 1=TITLE, 3=CENTER_TITLE (ctrTitle),
+            # 14=VERTICAL_TITLE. The previous (0, 14) check was dead code —
+            # 0 is not a valid placeholder type, so is_title was always False
+            # and every title placeholder silently picked up bodyStyle instead
+            # of titleStyle.
+            is_title = ph_type in (1, 3, 14)
 
             # Extract all paragraphs with their formatting
             for para in text_frame.paragraphs:
@@ -101,7 +164,7 @@ class TextMixin:
                             color=run_color,
                         ))
 
-                    # Paragraph-level defaults from first run
+                    # Paragraph-level defaults from first run (L1)
                     first = runs[0]
                     font_name = first.font_name
                     font_size = first.font_size
@@ -116,29 +179,44 @@ class TextMixin:
                     if line_spacing is None:
                         line_spacing = self.default_line_spacing
 
-                # Apply master text defaults for missing styles (placeholder uses
-                # master title/body styles depending on placeholder type)
-                # We check is_title later, so apply body styles as default here
-                # and override with title styles after is_title is determined
-                _, current_body_styles = self._get_current_master_styles()
-                if current_body_styles and para_level in current_body_styles:
-                    master_style = current_body_styles[para_level]
-                    if font_name is None and master_style.font_name:
-                        font_name = master_style.font_name
-                    if font_size is None and master_style.font_size:
-                        font_size = master_style.font_size
-                    if color is None and master_style.color:
-                        color = master_style.color
+                # ECMA-376 font-property inheritance chain (priority high → low):
+                #   L1 run.rPr  →  L2 pPr.defRPr  →  L3 list style  →
+                #   L4 master txStyles  →  (L5 theme, deferred)  →  18pt floor
+                # Every layer is `if X is None/unset`, so the FIRST layer that
+                # provides a value wins. Order is load-bearing.
+                lst_level = para_level + 1  # lvl1pPr is 1-based; para.level is 0-based
 
-                # Apply layout placeholder lstStyle defaults (e.g., 52pt for
-                # ctrTitle placeholders) when master styles didn't provide a value
-                if (font_size is None or font_name is None or color is None):
+                # L2: paragraph-level <a:pPr><a:defRPr>. Common when slide XML
+                # sets sz/bold on the paragraph instead of on each run — e.g.
+                # sample.pptx stores <a:pPr><a:defRPr sz="6000" b="1"/> for its
+                # 60pt bold title with no run-level sz. Previously dropped
+                # entirely, every such paragraph fell through to the 18pt floor.
+                para_def = self._get_paragraph_def_rpr(para._p, self._ns)
+                if para_def:
+                    if font_size is None and para_def.font_size is not None:
+                        font_size = para_def.font_size
+                    if bold is False and para_def.bold is not None:
+                        bold = para_def.bold
+                    if italic is False and para_def.italic is not None:
+                        italic = para_def.italic
+                    if font_name is None and para_def.font_name is not None:
+                        font_name = para_def.font_name
+                    if color is None and para_def.color is not None:
+                        color = para_def.color
+
+                # L3: layout placeholder lstStyle. Per ECMA-376 §21.1.2.2.16,
+                # list style outranks master txStyles, so this MUST run before
+                # the master cascade below. The previous code had them in the
+                # wrong order, which silently let master bodyStyle override the
+                # layout's per-placeholder size (e.g. layout ctrTitle 44pt
+                # beaten by master bodyStyle lvl1 sz).
+                if (font_size is None or font_name is None or color is None
+                        or bold is False or italic is False):
                     if (hasattr(self, '_current_layout') and self._current_layout
                             and hasattr(shape, 'placeholder_format') and shape.placeholder_format):
                         try:
                             layout_defaults = self._get_layout_placeholder_defaults(
                                 self._current_layout, int(shape.placeholder_format.type))
-                            lst_level = para_level + 1  # lstStyle levels are 1-based
                             if layout_defaults and lst_level in layout_defaults:
                                 lst_style = layout_defaults[lst_level]
                                 if font_size is None and lst_style.font_size:
@@ -147,8 +225,32 @@ class TextMixin:
                                     font_name = lst_style.font_name
                                 if color is None and lst_style.color:
                                     color = lst_style.color
+                                if bold is False and lst_style.bold is not None:
+                                    bold = lst_style.bold
+                                if italic is False and lst_style.italic is not None:
+                                    italic = lst_style.italic
                         except Exception:
                             pass
+
+                # L4: master txStyles. Title placeholders (type 0/14) use
+                # <p:titleStyle>; everything else uses <p:bodyStyle>. The old
+                # comment promised a title-override "after is_title is
+                # determined" that never ran — is_title was computed after the
+                # paragraph loop, so ctrTitle silently picked up bodyStyle.
+                title_styles, body_styles, _ = self._get_current_master_styles()
+                master_styles = title_styles if is_title else body_styles
+                if master_styles and lst_level in master_styles:
+                    ms = master_styles[lst_level]
+                    if font_name is None and ms.font_name:
+                        font_name = ms.font_name
+                    if font_size is None and ms.font_size:
+                        font_size = ms.font_size
+                    if color is None and ms.color:
+                        color = ms.color
+                    if bold is False and ms.bold is not None:
+                        bold = ms.bold
+                    if italic is False and ms.italic is not None:
+                        italic = ms.italic
 
                 # Parse bullet properties from OpenXML
                 bullet = None
@@ -167,6 +269,16 @@ class TextMixin:
                             indent_pt = emu_to_pt(int(indent_val))
                 except Exception:
                     pass
+
+                # PPT body default when the entire inheritance chain (run →
+                # paragraph → master body → layout lstStyle) fails to specify
+                # a size.  Hardcoded per ECMA-376 / Office docs: 18pt for
+                # unspecified body text.  Without this floor, downstream code
+                # (line-height emission, shrink estimator, bullet column math)
+                # sees None and either crashes or falls back to ad-hoc
+                # constants at each call site.
+                if font_size is None:
+                    font_size = 18.0
 
                 paragraphs.append(ParagraphElement(
                     text=para_text,
@@ -187,12 +299,6 @@ class TextMixin:
                     runs=runs,
                 ))
 
-        # Determine if this is a title
-        is_title = shape.placeholder_format.type in (
-            0,  # Title
-            14,  # Centered Title
-        ) if hasattr(shape, "placeholder_format") else False
-
         # Resolve bullet inheritance for all paragraphs
         for p in paragraphs:
             if p.bullet and p.bullet.type == 'inherited':
@@ -206,6 +312,9 @@ class TextMixin:
         flip_h = False
         flip_v = False
         scene3d_camera = None
+        vertical_align = None
+        autofit_mode = "noAutofit"
+        autofit_fontScale = None
 
         if hasattr(shape, "_element"):
             elem = shape._element
@@ -213,7 +322,6 @@ class TextMixin:
 
             # Check body properties for vertical text and alignment
             body_pr = elem.find('.//a:bodyPr', ns)
-            vertical_align = None
             if body_pr is not None:
                 vert = body_pr.get('vert')  # eaVert, mongolianVert, etc.
 
@@ -222,6 +330,9 @@ class TextMixin:
                 if anchor:
                     anchor_map = {'t': 'top', 'ctr': 'middle', 'b': 'bottom'}
                     vertical_align = anchor_map.get(anchor)
+
+            # Detect autofit mode (spAutoFit / normAutofit / noAutofit)
+            autofit_mode, autofit_fontScale = self._detect_autofit(body_pr, ns)
 
             # Check transformation for flip and rotation
             xfrm = elem.find('.//a:xfrm', ns)
@@ -246,6 +357,13 @@ class TextMixin:
         metadata = {"placeholder_type": shape.placeholder_format.type if hasattr(shape, "placeholder_format") else None}
         if scene3d_camera:
             metadata['scene3d_camera'] = scene3d_camera
+        metadata['autofit'] = autofit_mode
+        if autofit_fontScale is not None:
+            metadata['normAutofit_fontScale'] = autofit_fontScale
+
+        # Note: _parse_text_box builds the equivalent dict via
+        # _build_text_box_metadata() — kept inline here because the
+        # placeholder_type entry is specific to this code path.
 
         return TextElement(
             element_type="text",
@@ -271,6 +389,12 @@ class TextMixin:
         """Parse a text box shape with paragraph-level structure."""
         text_frame = shape.text_frame
         text = sanitize_pptx_text(text_frame.text)  # Sanitize for backward compatibility
+
+        # L3 source: this shape's own <p:txBody><a:lstStyle>. Parsed once for
+        # the whole shape — every paragraph in this textbox shares it. May be
+        # empty when the textbox has no lstStyle (the common case for plain
+        # add_textbox output); the cascade below just skips it.
+        txbody_lst = self._get_shape_txbody_lst_style(shape)
 
         # Extract all paragraphs with their formatting
         paragraphs = []
@@ -344,7 +468,7 @@ class TextMixin:
                         color=run_color,
                     ))
 
-                # Paragraph-level defaults from first run
+                # Paragraph-level defaults from first run (L1)
                 first = runs[0]
                 font_name = first.font_name
                 font_size = first.font_size
@@ -356,16 +480,60 @@ class TextMixin:
             if line_spacing is None and line_spacing_pts is None:
                 line_spacing = self.default_line_spacing
 
-            # Apply master text defaults for missing styles (text boxes use body styles)
-            _, current_body_styles = self._get_current_master_styles()
-            if current_body_styles and para_level in current_body_styles:
-                master_style = current_body_styles[para_level]
-                if font_name is None and master_style.font_name:
-                    font_name = master_style.font_name
-                if font_size is None and master_style.font_size:
-                    font_size = master_style.font_size
-                if color is None and master_style.color:
-                    color = master_style.color
+            # ECMA-376 inheritance for non-placeholder shapes (§21.1.2.2.16):
+            #   L1 run.rPr → L2 pPr.defRPr → L3 txBody lstStyle →
+            #   L4 master otherStyle → (L5 theme, deferred) → 18pt floor
+            lst_level = para_level + 1  # lvl1pPr is 1-based; para.level is 0-based
+
+            # L2: paragraph-level <a:pPr><a:defRPr>. Previously dropped here
+            # too — same bug class as the placeholder path.
+            para_def = self._get_paragraph_def_rpr(para._p, self._ns)
+            if para_def:
+                if font_size is None and para_def.font_size is not None:
+                    font_size = para_def.font_size
+                if bold is False and para_def.bold is not None:
+                    bold = para_def.bold
+                if italic is False and para_def.italic is not None:
+                    italic = para_def.italic
+                if font_name is None and para_def.font_name is not None:
+                    font_name = para_def.font_name
+                if color is None and para_def.color is not None:
+                    color = para_def.color
+
+            # L3: this shape's own <p:txBody><a:lstStyle> (parsed once above
+            # the paragraph loop). The old comment listed this layer in the
+            # chain but the code never read it — non-placeholder shapes with
+            # a txBody lstStyle silently fell through to otherStyle.
+            if txbody_lst and lst_level in txbody_lst:
+                ts = txbody_lst[lst_level]
+                if font_size is None and ts.font_size:
+                    font_size = ts.font_size
+                if font_name is None and ts.font_name:
+                    font_name = ts.font_name
+                if color is None and ts.color:
+                    color = ts.color
+                if bold is False and ts.bold is not None:
+                    bold = ts.bold
+                if italic is False and ts.italic is not None:
+                    italic = ts.italic
+
+            # L4: master <p:otherStyle>. Free TextBoxes inherit ONLY from
+            # otherStyle — NOT titleStyle/bodyStyle (those are placeholder-only).
+            # poster.pptx: bodyStyle lvl1 sz=4409 but otherStyle lvl1 sz=2835;
+            # PPT renders these TextBoxes at 28.35pt, so otherStyle is correct.
+            _, _, current_other_styles = self._get_current_master_styles()
+            if current_other_styles and lst_level in current_other_styles:
+                other_style = current_other_styles[lst_level]
+                if font_name is None and other_style.font_name:
+                    font_name = other_style.font_name
+                if font_size is None and other_style.font_size:
+                    font_size = other_style.font_size
+                if color is None and other_style.color:
+                    color = other_style.color
+                if bold is False and other_style.bold is not None:
+                    bold = other_style.bold
+                if italic is False and other_style.italic is not None:
+                    italic = other_style.italic
 
             # Parse bullet properties from OpenXML
             bullet = None
@@ -384,6 +552,13 @@ class TextMixin:
                         indent_pt = emu_to_pt(int(indent_val))
             except Exception:
                 pass
+
+            # PPT body default when the entire inheritance chain fails to
+            # specify a size.  18pt per ECMA-376 / Office docs.  Without
+            # this floor, downstream code sees None and falls back to
+            # ad-hoc constants at each call site.
+            if font_size is None:
+                font_size = 18.0
 
             paragraphs.append(ParagraphElement(
                 text=para_text,
@@ -452,6 +627,9 @@ class TextMixin:
         flip_h = False
         flip_v = False
         scene3d_camera = None
+        vertical_align = None
+        autofit_mode = "noAutofit"
+        autofit_fontScale = None
 
         if hasattr(shape, "_element"):
             elem = shape._element
@@ -459,7 +637,6 @@ class TextMixin:
 
             # Check body properties for vertical text and alignment
             body_pr = elem.find('.//a:bodyPr', ns)
-            vertical_align = None
             if body_pr is not None:
                 vert = body_pr.get('vert')  # eaVert, mongolianVert, etc.
 
@@ -468,6 +645,9 @@ class TextMixin:
                 if anchor:
                     anchor_map = {'t': 'top', 'ctr': 'middle', 'b': 'bottom'}
                     vertical_align = anchor_map.get(anchor)
+
+            # Detect autofit mode (spAutoFit / normAutofit / noAutofit)
+            autofit_mode, autofit_fontScale = self._detect_autofit(body_pr, ns)
 
             # Check transformation for flip and rotation
             xfrm = elem.find('.//a:xfrm', ns)
@@ -598,5 +778,5 @@ class TextMixin:
             vertical_align=vertical_align,
             line_color=line_color,
             line_width=line_width,
-            metadata={'scene3d_camera': scene3d_camera} if scene3d_camera else None,
+            metadata=self._build_text_box_metadata(scene3d_camera, autofit_mode, autofit_fontScale),
         )

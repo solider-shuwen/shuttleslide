@@ -168,3 +168,11 @@ manifest_*.json
 *.env
 !*.env.example
 tests/
+remotion-main/
+.playwright-cli/
+.remotion/
+
+# Keep examples directory tracked (overrides *.pptx and tmp/ above)
+!example/
+!example/**
+

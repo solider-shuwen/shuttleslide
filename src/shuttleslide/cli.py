@@ -14,6 +14,67 @@ from shuttleslide.pptx_to_html.layouts.pptview import PPTLayout
 from shuttleslide.pptx_to_html.layouts.slideshow import SlideshowLayout
 
 
+def _ensure_utf8_stdio() -> None:
+    """Reconfigure stdout/stderr to UTF-8 so Unicode in docstrings and
+    click.echo output doesn't UnicodeEncodeError on Windows GBK (cp936)
+    consoles.
+
+    Why: `slidecraft --help` reads main()'s docstring which contains
+    "↔", "→", "—". On a stock zh-CN Windows console, sys.stdout
+    defaults to cp936 and Click writes through it, failing to encode.
+    The fix is class-level: force UTF-8 once at import time, so any
+    future Unicode in any command Just Works.
+
+    Idempotent: reconfiguring an already-UTF-8 stream is a no-op.
+    Streams without `.reconfigure` (StringIO, pytest capture,
+    sys.stdout=None under pythonw) are skipped silently.
+    """
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        if stream is None:
+            continue
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            # pytest / custom harnesses may replace sys.stdout with a
+            # stream that exposes reconfigure() but rejects the call.
+            # Don't crash CLI startup over a cosmetic fix.
+            pass
+
+
+_ensure_utf8_stdio()
+
+
+def _resolve_output_path(output: Optional[str], input_path: Path, suffix: str) -> Path:
+    """Resolve the destination file path for a single-file conversion.
+
+    Handles three forms of `-o/--output`:
+
+    - None            -> derive from the input path (default).
+    - A directory     -> write ``<input-stem><suffix>`` inside it. Detects
+                         both "path points to an existing directory" and
+                         "path ends with a path separator" (the user wrote
+                         ``-o tmp/out/`` to mean "into this folder").
+    - Anything else   -> treat as the literal file path.
+
+    Why: ``Path("tmp/out/").write_text(...)`` raises ``PermissionError`` on
+    Windows because the OS refuses to open a directory as a file. Catching
+    both ``is_dir()`` and a trailing separator covers the cases where the
+    directory does and does not yet exist.
+    """
+    if not output:
+        return input_path.with_suffix(suffix)
+
+    output_path = Path(output)
+    looks_like_dir = output.endswith(("/", "\\")) or output_path.is_dir()
+    if looks_like_dir:
+        return output_path / input_path.with_suffix(suffix).name
+    return output_path
+
+
 @click.group()
 @click.version_option(version="0.1.0")
 def main():
@@ -65,6 +126,12 @@ register_extensions(main)
     "--base64", is_flag=True,
     help="Embed images as base64 in HTML (default: save as separate files for better performance)"
 )
+@click.option(
+    "--no-shrink", is_flag=True,
+    help="Disable Playwright-based shrink-on-overflow for text shapes. "
+         "By default, text that would exceed the PPT-declared shape height "
+         "is font-scaled to fit (mirrors PPT's normAutofit behavior)."
+)
 def to_html(
     input_pptx: str,
     output: Optional[str],
@@ -75,6 +142,7 @@ def to_html(
     animations: bool,
     no_animations: bool,
     base64: bool,
+    no_shrink: bool,
 ):
     """
     Convert PPTX file to HTML.
@@ -90,10 +158,7 @@ def to_html(
 
         # Determine output path
         if not stdout:
-            if output:
-                output_path = Path(output)
-            else:
-                output_path = input_path.with_suffix(".html")
+            output_path = _resolve_output_path(output, input_path, ".html")
 
         # Show progress
         if verbose:
@@ -123,18 +188,48 @@ def to_html(
         else:
             assets_dir = None
 
-        if layout == "flow":
-            layout_engine = FlowLayout(output_dir=assets_dir)
-        elif layout == "pptview":
-            layout_engine = PPTLayout(use_base64=use_base64, output_dir=assets_dir)
-        else:  # slideshow
-            layout_engine = SlideshowLayout(enable_animations=enable_animations, use_base64=use_base64, output_dir=assets_dir)
+        # Playwright measurer powers HTML-mode shrink-on-overflow: text
+        # shapes that would exceed the PPT-declared shape height are
+        # font-scaled to fit (mirrors PPT's <a:normAutofit fontScale>).
+        # Enabled by default; --no-shrink disables.
+        measurer = None
+        if not no_shrink:
+            from shuttleslide.pptx_to_html.text_measure import PlaywrightTextMeasurer
+            if verbose:
+                click.echo("Launching headless Chromium for text measurement...")
+            measurer = PlaywrightTextMeasurer()
+            try:
+                measurer.start()
+            except Exception as e:
+                # Fall back to no-shrink mode rather than aborting the whole
+                # conversion.  The user gets a working HTML, just without
+                # shrink-on-overflow (text may overlap if shapes are tight).
+                click.echo(
+                    f"Warning: Playwright unavailable ({e}); "
+                    f"shrink-on-overflow disabled.",
+                    err=True,
+                )
+                measurer = None
 
-        # Convert to HTML
-        if verbose:
-            click.echo(f"Converting with {layout} layout...")
+        try:
+            if layout == "flow":
+                layout_engine = FlowLayout(output_dir=assets_dir, measurer=measurer)
+            elif layout == "pptview":
+                layout_engine = PPTLayout(use_base64=use_base64, output_dir=assets_dir,
+                                           measurer=measurer)
+            else:  # slideshow
+                layout_engine = SlideshowLayout(enable_animations=enable_animations,
+                                                 use_base64=use_base64, output_dir=assets_dir,
+                                                 measurer=measurer)
 
-        html = layout_engine.convert(slides)
+            # Convert to HTML
+            if verbose:
+                click.echo(f"Converting with {layout} layout...")
+
+            html = layout_engine.convert(slides)
+        finally:
+            if measurer is not None:
+                measurer.close()
 
         # Output
         if stdout:
@@ -178,10 +273,7 @@ def to_pptx(input_html: str, output: Optional[str], verbose: bool):
         html = input_path.read_text(encoding="utf-8")
 
         # Determine output path
-        if output:
-            output_path = Path(output)
-        else:
-            output_path = input_path.with_suffix(".pptx")
+        output_path = _resolve_output_path(output, input_path, ".pptx")
 
         if verbose:
             click.echo(f"Converting: {input_path}")
@@ -242,10 +334,7 @@ def json_to_pptx(input_json: str, output: Optional[str], verbose: bool):
         data = json_mod.loads(input_path.read_text(encoding="utf-8"))
         dsl = load_presentation(data)
 
-        if output:
-            output_path = Path(output)
-        else:
-            output_path = input_path.with_suffix(".pptx")
+        output_path = _resolve_output_path(output, input_path, ".pptx")
 
         if verbose:
             click.echo(f"Rendering {len(dsl.slides)} slide(s) to PPTX...")
@@ -275,7 +364,7 @@ def info():
     click.echo("")
     click.echo("Current Phase: Phase 1 - PPTX → HTML")
     click.echo("")
-    click.echo("For more information, visit: https://github.com/yourusername/shuttleslide")
+    click.echo("For more information, visit: https://github.com/solider-shuwen/shuttleslide")
 
 
 @main.command()
@@ -398,6 +487,9 @@ def generate(
         click.echo("")
 
     async def _run():
+        from shuttleslide.agent.asyncio_diag import install_noise_filter
+
+        install_noise_filter(asyncio.get_running_loop())
         orch = AgentOrchestrator(config)
         return await orch.run()
 
@@ -522,6 +614,15 @@ def warm_cache(force: bool, include_google_fonts: bool):
                    "and populates canned state. Fast end-to-end UI testing "
                    "without API credentials. Locks all credential fields "
                    "(hidden in the form).")
+@click.option("--canvas", "canvas_mode", is_flag=True,
+              help="Canvas mode: the config screen shows an aspect-ratio "
+                   "picker (16:9 / 9:16 / 1:1 / 3:4 / custom W:H). The "
+                   "chosen ratio threads through AgentConfig.canvas_*_emu "
+                   "and the review UI renders thumbnails + preview at the "
+                   "true aspect ratio instead of the 16:9 default. Pro's "
+                   "canvas house_rules provider (registered via the "
+                   "shuttleslide.review.house_rules entry-point group) "
+                   "swaps in canvas-specific prompts when this flag is on.")
 def review(
     host: str,
     port: int,
@@ -534,6 +635,7 @@ def review(
     vlm_api_key: Optional[str],
     vlm_model: Optional[str],
     mock_mode: bool,
+    canvas_mode: bool,
 ):
     """Launch the web review client.
 
@@ -569,6 +671,9 @@ def review(
     import time
     import webbrowser
 
+    import logging
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
     from shuttleslide.agent.review.server import ReviewServer
 
     # Load .env from CWD before reading os.environ. Silent no-op when
@@ -582,6 +687,17 @@ def review(
         pass
 
     # Map AgentConfig field names to their SHUTTLESLIDE_* env var.
+    # Every field here is force-applied server-side at POST /api/start
+    # (server.py _extract_config_kwargs overrides form values with
+    # effective_defaults), so listing a field here also makes the UI
+    # render it readonly via /api/defaults → locked[]. That's correct
+    # for credentials AND for behavior flags the user explicitly set in
+    # .env — editing .env becomes the single source of truth.
+    #
+    # MUST stay in sync with AgentConfig.from_env's env reads
+    # (config.py). Any SHUTTLESLIDE_* var read there but missing here
+    # is silently dropped in the review-server flow (the bug that hit
+    # disable_required_tool_choice: .env said true, server got False).
     _ENV_MAP = {
         "api_base": "SHUTTLESLIDE_API_BASE",
         "api_key": "SHUTTLESLIDE_API_KEY",
@@ -589,6 +705,10 @@ def review(
         "vlm_api_base": "SHUTTLESLIDE_VLM_API_BASE",
         "vlm_api_key": "SHUTTLESLIDE_VLM_API_KEY",
         "vlm_model": "SHUTTLESLIDE_VLM_MODEL",
+        "image_search_provider": "SHUTTLESLIDE_IMAGE_SEARCH_PROVIDER",
+        "image_search_api_key": "SHUTTLESLIDE_IMAGE_SEARCH_API_KEY",
+        "disable_required_tool_choice": "SHUTTLESLIDE_DISABLE_REQUIRED_TOOL_CHOICE",
+        "enable_vlm_verification": "SHUTTLESLIDE_ENABLE_VLM_VERIFICATION",
     }
     env_defaults = {
         field: os.environ[env_var]
@@ -619,12 +739,15 @@ def review(
         env_defaults=env_defaults,
         cli_overrides=cli_overrides,
         mock_mode=mock_mode,
+        canvas_mode=canvas_mode,
     )
     server.start_in_thread()
     click.echo(f"Review UI: {server.url}")
     click.echo(f"Output base directory: {base_dir}")
     if mock_mode:
         click.echo("MOCK MODE: synthetic events, no real LLM calls.")
+    if canvas_mode:
+        click.echo("CANVAS MODE: aspect-ratio picker enabled on config screen.")
     if env_defaults or cli_overrides:
         # Surface which fields are locked so the user isn't surprised
         # when the form greys them out.

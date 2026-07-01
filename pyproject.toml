@@ -5,26 +5,39 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "shuttleslide"
 version = "0.1.0"
-description = "Bidirectional conversion between PowerPoint (PPTX) and HTML with round-trip format preservation"
+description = "Bidirectional PPTX ↔ HTML conversion with round-trip format preservation, plus an optional AI slide-generation pipeline"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = {text = "MIT"}
 authors = [
     {name = "Shuttleslide Contributors"}
 ]
-keywords = ["pptx", "html", "conversion", "powerpoint", "presentation"]
+keywords = [
+    "pptx",
+    "html",
+    "powerpoint",
+    "presentation",
+    "conversion",
+    "round-trip",
+    "svg",
+    "drawingml",
+    "slide",
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Software Development :: Libraries :: Python Modules",
-    "Topic :: Office/Business",
+    "Topic :: Office/Business :: Office Suites",
+    "Topic :: Text Processing :: Markup :: HTML",
+    "Topic :: Multimedia :: Graphics :: Graphics Conversion",
 ]
 dependencies = [
     "python-pptx>=0.6.21",
@@ -32,33 +45,43 @@ dependencies = [
     "lxml>=4.9.0",
     "Pillow>=9.0.0",
     "jinja2>=3.1.0",
-    "openai>=1.0,<2.0",
-    "trafilatura>=1.12.0",
-    "requests>=2.28.0",
     "playwright>=1.40.0",
-    "pytest-asyncio>=0.21.0",
+    "requests>=2.28.0",
 ]
 
 [project.optional-dependencies]
+ai = [
+    # `slidecraft generate` / `review` 命令需要 OpenAI 兼容 LLM
+    "openai>=1.0,<2.0",
+    "trafilatura>=1.12.0",
+]
+review = [
+    # `slidecraft review` 的 web UI（FastAPI + WebSocket）
+    "fastapi>=0.100.0",
+    "uvicorn>=0.20.0",
+    "websockets>=11.0",
+    "python-dotenv>=1.0",
+    "python-multipart>=0.0.6",
+]
+all = [
+    "shuttleslide[ai,review]",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
+    "pytest-asyncio>=0.21.0",
     "black>=23.0.0",
     "mypy>=1.0.0",
     "httpx>=0.24.0",
     "httpx-ws>=0.5.0",
 ]
-review = [
-    "fastapi>=0.100.0",
-    "uvicorn>=0.20.0",
-    "websockets>=11.0",
-    "python-dotenv>=1.0",
-]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/shuttleslide"
-Repository = "https://github.com/yourusername/shuttleslide"
-Issues = "https://github.com/yourusername/shuttleslide/issues"
+Homepage = "https://github.com/solider-shuwen/shuttleslide"
+Repository = "https://github.com/solider-shuwen/shuttleslide"
+Documentation = "https://github.com/solider-shuwen/shuttleslide#readme"
+Issues = "https://github.com/solider-shuwen/shuttleslide/issues"
+Changelog = "https://github.com/solider-shuwen/shuttleslide/releases"
 
 [project.scripts]
 slidecraft = "shuttleslide.cli:main"
@@ -70,14 +93,16 @@ where = ["src"]
 "" = "src"
 
 [tool.setuptools.package-data]
-"shuttleslide.agent" = ["templates/*.html.j2", "templates/elements/*.html.j2"]
-"shuttleslide.agent.review" = ["static/*.html"]
+"shuttleslide.agent" = ["templates/*.html.j2", "templates/layouts/*.html.j2"]
+"shuttleslide.agent.review" = ["static/*.html", "static/*.js", "static/*.css"]
+"shuttleslide.html_to_pptx" = ["js/*.js"]
+"shuttleslide.pptx_to_html" = ["templates/*.html", "templates/*.css", "templates/*.js", "data/*.xml"]
 
 [tool.black]
 line-length = 100
-target-version = ['py38']
+target-version = ['py39']
 
 [tool.mypy]
-python_version = "3.8"
+python_version = "3.9"
 warn_return_any = true
 warn_unused_configs = true

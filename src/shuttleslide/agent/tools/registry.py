@@ -185,7 +185,7 @@ BACKGROUND_SCHEMA: Dict[str, Any] = {
     "description": "Background fill: solid color, gradient, or image URL.",
     "properties": {
         "type": {"type": "string", "enum": ["solid", "gradient", "image", "none"]},
-        "color": {"type": "string", "description": "Hex color like #133EFF or #133EFFCC (with alpha)"},
+        "color": {"type": "string", "description": "Hex color, 6-digit (#RRGGBB) or 8-digit with alpha (#RRGGBBAA)"},
         "gradient": {
             "type": "object",
             "properties": {

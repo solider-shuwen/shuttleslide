@@ -17,7 +17,7 @@ defensive asserts in tests).
 
 from __future__ import annotations
 
-from typing import List, Optional, Protocol, runtime_checkable
+from typing import Any, Dict, List, Optional, Protocol, Tuple, runtime_checkable
 
 from shuttleslide.agent.review.review_gate import StageSnapshot
 
@@ -71,5 +71,51 @@ class Broadcaster(Protocol):
         ``state`` is one of: idle | starting | running | done | failed.
         Drives the UI's config-form ↔ pipeline-screen switching. ``error``
         is non-empty only when ``state == "failed"``.
+        """
+        ...
+
+    def emit_pipeline_stages(self, stages: List[str]) -> None:
+        """Push the full ordered stage list for the resolved pipeline.
+
+        Fires once at pipeline startup (right after ``pipeline_state=
+        running``) so the UI can pre-create all stage tabs in the correct
+        execution order. The list mirrors ``registry.resolve_order()``
+        names; clients treat it as the single source of truth for the
+        sidebar, replacing any client-side stage discovery
+        (``extraStages`` in the legacy app.js).
+        """
+        ...
+
+    def emit_history_snapshot(self, entries: List[Dict[str, Any]]) -> None:
+        """Push a fresh edit-history snapshot to all connected clients.
+
+        Fired after every successful edit / undo / revert so the sidebar
+        History panel reflects the latest stack. ``entries`` is newest-
+        first (idx=0 is the most recent edit), already JSON-safe.
+        """
+        ...
+
+    def emit_stale_marks(self, marks: Dict[str, List[Dict[str, Any]]]) -> None:
+        """Push the current ``stale_marks`` to all connected clients.
+
+        Fired after every edit / undo / revert (and after a regenerate
+        completes) so the UI's stale badges add or clear in real time.
+        ``marks`` is the verbatim ``state.stale_marks`` dict, already
+        JSON-safe via the ``StaleMark.to_dict`` shape.
+        """
+        ...
+
+    def emit_chat_history(
+        self,
+        target_path: Tuple[Any, ...],
+        messages: List[Dict[str, str]],
+    ) -> None:
+        """Push per-target chat history to all connected clients.
+
+        Fired by the orchestrator after a successful LLM-mode edit
+        (right after the assistant reply is appended to SessionStore)
+        so the chat panel surfaces the LLM's natural-language reply
+        without needing a target-switch refresh. ``messages`` is the
+        ``[{role, body}]`` wire format.
         """
         ...

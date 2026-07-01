@@ -182,6 +182,16 @@ class AgentOrchestrator:
                 if isinstance(exc, ReviewCancelledError):
                     raise
                 state.add_warning(f"stage {stage.name!r} failed: {exc}")
+                # Hook for subclasses to broadcast the failure (e.g. via
+                # the review UI's broadcaster). Base default is no-op so
+                # the warning silently lands in state.warnings — keeping
+                # the legacy non-review CLI path quiet. Without this hook
+                # the InteractiveOrchestrator has no seam to surface the
+                # error, and stage failures (e.g. RenderVideoStage's
+                # Node/Remotion errors) get swallowed: pipeline_state
+                # flips to "done" with the failing stage's tab empty and
+                # no signal to the user about what went wrong.
+                await self._on_stage_failed(stage, exc, state)
                 if stage.terminal and result is None:
                     # Terminal stage failed — synthesise a partial result
                     # so callers get an OrchestratorResult instead of None.
@@ -224,6 +234,7 @@ class AgentOrchestrator:
             web_search_provider=self._web_search_provider,
             vlm_verifier=self._vlm_verifier,
             browser_manager=self._browser_manager,
+            broadcaster=getattr(self, "broadcaster", None),
         )
 
     async def _prepare_state(
@@ -267,6 +278,7 @@ class AgentOrchestrator:
             target_count=target_count,
             canvas_width_emu=self.config.canvas_width_emu,
             canvas_height_emu=self.config.canvas_height_emu,
+            user_image_library=self.config.user_image_library,
         )
 
     async def _post_stage_hook(self, stage: Stage, state: AgentState) -> None:
@@ -275,6 +287,20 @@ class AgentOrchestrator:
         Subclasses (e.g. InteractiveOrchestrator) override this to insert
         review/telemetry/checkpoint behaviour between stages without
         duplicating the pipeline wiring.
+        """
+        return None
+
+    async def _on_stage_failed(
+        self, stage: Stage, exc: BaseException, state: AgentState
+    ) -> None:
+        """Hook invoked when a stage raises. Default is no-op — the
+        failure is already recorded in ``state.warnings`` by the caller.
+
+        Subclasses (e.g. InteractiveOrchestrator) override this to
+        broadcast the error to a UI / log sink. Without an override the
+        failure is silent except for the warning entry, which the
+        non-review CLI path intends; review UIs need the override so
+        users see *why* a stage's tab is empty after pipeline_done.
         """
         return None
 

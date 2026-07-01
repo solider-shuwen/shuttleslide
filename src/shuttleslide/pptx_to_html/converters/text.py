@@ -2,11 +2,26 @@
 Text Converter - converts text elements to HTML.
 """
 
-from html import escape
 import base64
+import math
 import os
+from html import escape
 from typing import Optional
+
 from shuttleslide.pptx_to_html.models import TextElement
+
+
+# ---------------------------------------------------------------------------
+# Shrink-on-overflow constants
+# ---------------------------------------------------------------------------
+# When wrapped or single-line content would exceed the PPT-declared shape
+# height (computed analytically from Playwright-measured text widths), the
+# converter shrinks font_size and line_height proportionally so the content
+# fits — or hits the MIN_SCALE floor.  Mirrors PPT's own <a:normAutofit
+# fontScale="..."/> behaviour, which the parser exposes via
+# element.metadata['normAutofit_fontScale'] (100000 = 100%).
+MIN_SCALE = 0.5
+PT_TO_PX = 96.0 / 72.0
 
 
 # Line height adjustment factor for PPT to CSS conversion
@@ -122,11 +137,26 @@ class TextConverter:
     Converts text elements from PPTX to HTML.
     """
 
-    def __init__(self, use_base64: bool = False, output_dir: Optional[str] = None):
+    def __init__(self, use_base64: bool = False, output_dir: Optional[str] = None,
+                 measurer=None):
+        """
+        Initialize the text converter.
+
+        Args:
+            use_base64: Whether to embed images as base64.
+            output_dir: Directory for saving image assets. If None, uses default.
+            measurer: Optional PlaywrightTextMeasurer (already started).
+                When provided, enables shrink-on-overflow: text that would
+                exceed the PPT-declared shape height is font-scaled to fit
+                (or hits MIN_SCALE=0.5 floor).  When None, no shrink fires
+                and behaviour is identical to v1.
+        """
         self.use_base64 = use_base64
         self.output_dir = output_dir
+        self._measurer = measurer
         self._bullet_counter = 0
         self._created_dirs = set()
+        self._current_scale = 1.0  # per-convert shrink scale; reset after each call
 
     def convert(self, element: TextElement) -> str:
         """
@@ -138,6 +168,12 @@ class TextConverter:
         Returns:
             HTML string representation
         """
+        # Compute shrink scale once per element; threaded through every
+        # font-size / line-height emission point below.  _compute_shrink_scale
+        # always returns a value (1.0 or computed scale), so each convert()
+        # call starts from a fresh scale rather than carrying state forward.
+        self._current_scale = self._compute_shrink_scale(element)
+
         # Check if we have paragraph structure (new format)
         if element.paragraphs:
             return self._convert_paragraphs(element)
@@ -180,6 +216,261 @@ class TextConverter:
 
         return f"<{tag} {attr_str}>{escaped_text}</{tag}>"
 
+    # ------------------------------------------------------------------
+    # Shrink-on-overflow
+    # ------------------------------------------------------------------
+
+    def _compute_shrink_scale(self, element: TextElement) -> float:
+        """Compute the font-size scale to apply for this element.
+
+        Mirrors PPT's <a:normAutofit fontScale="..."/> behaviour: if the
+        wrapped content would exceed the PPT-declared shape height, shrink
+        font_size + line_height proportionally so it fits (or hits the
+        MIN_SCALE floor).  Returns 1.0 when no shrink is needed.
+
+        Skipped (returns 1.0) when:
+          - No paragraphs (legacy single-text path; height rarely an issue).
+          - No measurer (caller opted out — graceful v1 behaviour).
+
+        Note on spAutoFit: we DO shrink these.  PPT's "shape grows with
+        text" semantics only works in PPT's editor — the saved XML has
+        fixed shape coordinates, so in absolute-positioned HTML layouts
+        an overflowing spAutoFit shape visually overlaps its neighbours.
+        Shrink prevents that overlap.
+        """
+        if not element.paragraphs or not self._measurer:
+            return 1.0
+
+        meta = getattr(element, 'metadata', None) or {}
+        scale = self._initial_scale_from_metadata(meta)
+
+        # element.width/height are already in CSS px (parser converted
+        # EMU -> px at parse time; layouts emit them directly as
+        # `width: {el.width}px` etc.).  So no PT_TO_PX conversion here.
+        shape_h_px = element.height
+        shape_w_px = element.width
+
+        h = self._estimate_total_height_px(element, scale, shape_w_px)
+        if h <= shape_h_px + 0.5:
+            return scale
+
+        # Binary search for the largest scale in [MIN_SCALE, scale] at
+        # which content still fits.  We cannot use a one-shot analytic
+        # divide (scale = scale * shape_h / h) because wrap line count
+        # is NOT constant in scale: when text barely overflows at the
+        # starting scale and wraps to N+1 lines, a slightly smaller
+        # font often fits on N lines — dropping total height by far
+        # more than the linear projection predicts.  The analytic thus
+        # overshoots (e.g. a 28pt title in a 44px shape gets clamped
+        # to MIN_SCALE=0.5 → 14pt, when in fact 27pt fits on one line).
+        #
+        # 12 iterations gives ~0.0005 precision across [0.5, 1.0] —
+        # more than enough; converges to "just barely fits".
+        lo, hi = MIN_SCALE, scale
+        # Invariant: at `hi' content overflows; at `lo' it fits (or we
+        # hit MIN_SCALE floor).  When even MIN_SCALE overflows we
+        # return MIN_SCALE and accept the residual.
+        h_lo = self._estimate_total_height_px(element, lo, shape_w_px)
+        if h_lo > shape_h_px + 0.5:
+            return lo  # accept overflow at MIN_SCALE
+        for _ in range(12):
+            mid = (lo + hi) / 2
+            h_mid = self._estimate_total_height_px(element, mid, shape_w_px)
+            if h_mid <= shape_h_px + 0.5:
+                lo = mid
+            else:
+                hi = mid
+        return lo
+
+    @staticmethod
+    def _initial_scale_from_metadata(meta: dict) -> float:
+        """Read PPT normAutofit fontScale (100000 = 100%) as the starting
+        scale.  PPT already shrunk via this value at save time; we honor
+        it as the floor and may shrink further when our renderer's font
+        metrics (Playwright) diverge from PPT's (GDI+)."""
+        raw = meta.get('normAutofit_fontScale')
+        if raw is None:
+            return 1.0
+        try:
+            s = int(raw) / 100000.0
+        except (TypeError, ValueError):
+            return 1.0
+        return max(0.1, min(1.0, s))
+
+    def _estimate_total_height_px(self, element: TextElement,
+                                   scale: float, shape_w_px: float) -> float:
+        """Analytically estimate the rendered total height (in CSS px) of
+        the element's paragraphs at the given scale.
+
+        For each paragraph:
+          lines = wrap_line_count (via measurer) or 1 for empty paragraphs
+          height += lines * effective_line_height_px + paragraph_spacing_px
+
+        effective_line_height respects the CSS line-box floor
+        (line_height >= font_size) so the estimate tracks what the browser
+        will actually render.
+        """
+        total = 0.0
+        for para in element.paragraphs:
+            fs_pt = (para.font_size or element.font_size or 12.0) * scale
+
+            # Resolve effective line-height (pt) honoring CSS line-box floor.
+            if para.line_spacing_pts is not None:
+                lh_pt = max(para.line_spacing_pts * scale, fs_pt)
+            elif para.line_spacing is not None:
+                lh_pt = fs_pt * para.line_spacing * LINE_HEIGHT_ADJUSTMENT
+            else:
+                # CSS default line-height ~1.2 (matches most browsers).
+                lh_pt = fs_pt * 1.2
+
+            # Compute the available text width for this paragraph.  For
+            # bullet paragraphs the renderer reserves a bullet column
+            # (= PPT marL) on the left via a flex `<span class="bullet">`
+            # with `width: <em>em`.  That column is NOT available for
+            # text wrap; if we count it, the estimator thinks the text
+            # has more room than it really does, under-counts wrap
+            # lines, and shrink fails to fire — leaving the actual
+            # render to wrap and overflow the shape (poster.html
+            # "Size Risk: 0.326 (highest)" regression).
+            text_w_px = shape_w_px
+            if getattr(para, 'has_bullet', False):
+                if para.margin_left is not None:
+                    bullet_col_em = para.margin_left / fs_pt
+                else:
+                    bullet_col_em = (para.level + 1) * 1.5
+                text_w_px = max(0.0, shape_w_px - bullet_col_em * fs_pt * PT_TO_PX)
+
+            # Resolve paragraph text (runs-only paragraphs have text=None).
+            para_text = para.text
+            if para_text is None and para.runs:
+                para_text = "".join(r.text or "" for r in para.runs)
+            if not para_text or not para_text.strip():
+                lines = 1  # empty paragraph still occupies a line (spacer)
+            else:
+                lines = self._estimate_wrap_lines_text(
+                    para_text, para, fs_pt, text_w_px
+                )
+
+            total += lines * lh_pt * PT_TO_PX
+
+            # Paragraph spacing before/after (already adjusted by
+            # PARAGRAPH_SPACING_RATIO at emission; mirror it here).
+            if para.spacing_before and para.spacing_before > 0:
+                total += para.spacing_before * PARAGRAPH_SPACING_RATIO * PT_TO_PX
+            if para.spacing_after and para.spacing_after > 0:
+                total += para.spacing_after * PARAGRAPH_SPACING_RATIO * PT_TO_PX
+
+        return total
+
+    def _estimate_wrap_lines_text(self, text: str, para,
+                                   font_size_pt: float,
+                                   shape_w_px: float) -> int:
+        """Estimate how many visual lines this paragraph will wrap to.
+
+        Uses greedy word-wrap: tokenizes the text into wrap-units (words
+        for Latin, characters for CJK), measures each unit's width in
+        headless Chromium, then packs units into lines until the next
+        unit would overflow shape_w.  This matches what a browser's own
+        wrap engine produces far more closely than the prior "total
+        width / shape width" estimate, which underestimated line count
+        because it ignored word-boundary slack.
+
+        Multi-run paragraphs are measured with the paragraph's default
+        font_size — approximate but adequate for shrink estimation.
+        """
+        if not text:
+            return 1
+        if shape_w_px <= 0:
+            return 1
+
+        # Newlines force line breaks; each segment wraps independently.
+        total_lines = 0
+        for seg_idx, segment in enumerate(text.split('\n')):
+            if not segment:
+                total_lines += 1
+                continue
+
+            units = self._tokenize_for_wrap(segment)
+            if not units:
+                total_lines += 1
+                continue
+
+            try:
+                widths = self._measurer.measure_batch([{
+                    "text": u,
+                    "font_family": para.font_name,
+                    "font_size_pt": font_size_pt,
+                    "font_weight": "bold" if para.bold else None,
+                    "font_style": "italic" if para.italic else None,
+                } for u in units])
+            except Exception:
+                # Defensive: measurer should not crash the converter.
+                # Conservative fallback: assume 1 line per segment.
+                # Underestimates height -> shrink won't fire for this case,
+                # but caller still gets working HTML.
+                total_lines += 1
+                continue
+
+            # Greedy pack.  Inter-word space: approximate as 0.27em,
+            # close to typical Latin space width.  CJK runs have no
+            # inter-char space (each char is its own unit).
+            space_w_px = font_size_pt * PT_TO_PX * 0.27
+            lines = 1
+            cur_w = 0.0
+            for unit, w in zip(units, widths):
+                is_cjk = self._is_cjk_char(unit[0]) if unit else False
+                gap = 0.0 if is_cjk or cur_w == 0 else space_w_px
+                if cur_w + gap + w > shape_w_px and cur_w > 0:
+                    lines += 1
+                    cur_w = w
+                else:
+                    cur_w += gap + w
+            total_lines += lines
+
+        return max(1, total_lines)
+
+    @staticmethod
+    def _tokenize_for_wrap(text: str) -> list[str]:
+        """Split text into wrap-units.
+
+        - CJK characters are individual units (CJK wraps per-character).
+        - Latin/other runs split into words on whitespace.
+        - Whitespace itself is dropped (gap is added at pack-time).
+        """
+        units = []
+        # Walk the string char by char, grouping Latin into words and
+        # emitting each CJK char as its own unit.
+        buf = []
+        for ch in text:
+            if TextConverter._is_cjk_char(ch):
+                if buf:
+                    units.append(''.join(buf))
+                    buf = []
+                units.append(ch)
+            elif ch.isspace():
+                if buf:
+                    units.append(''.join(buf))
+                    buf = []
+            else:
+                buf.append(ch)
+        if buf:
+            units.append(''.join(buf))
+        return units
+
+    @staticmethod
+    def _is_cjk_char(ch: str) -> bool:
+        """True for Han / Hiragana / Katakana / Hangul / CJK punctuation."""
+        if not ch:
+            return False
+        cp = ord(ch)
+        return (
+            0x3000 <= cp <= 0x9FFF        # CJK punctuation + Han ideographs
+            or 0xAC00 <= cp <= 0xD7AF     # Hangul
+            or 0xF900 <= cp <= 0xFAFF     # CJK compatibility ideographs
+            or 0xFF00 <= cp <= 0xFFEF     # Half/Fullwidth
+            or 0x3040 <= cp <= 0x30FF     # Hiragana + Katakana
+        )
+
     def _convert_paragraphs(self, element: TextElement) -> str:
         """
         Convert paragraphs to HTML with multi-level bullet support.
@@ -199,13 +490,20 @@ class TextConverter:
         autonum_counters: dict[int, int] = {}
 
         for para in element.paragraphs:
-            if not para.text.strip():
+            # Resolve effective text: para.text may be None for run-only
+            # paragraphs (some PPT parsers omit the concatenated text).
+            para_text = para.text
+            if para_text is None:
+                para_text = "".join(r.text or "" for r in para.runs) if para.runs else ""
+            if not para_text.strip():
                 # Render empty paragraphs as spacers — they take up vertical space
                 # in PPT (especially when font_size is large), affecting bottom-anchored text position
                 spacer_font_size = para.font_size if para.font_size else None
                 spacer_style = "margin: 0; padding: 0; line-height: 1.0"
                 if spacer_font_size:
-                    spacer_style += f"; font-size: {spacer_font_size}pt"
+                    spacer_style += (
+                        f"; font-size: {spacer_font_size * self._current_scale}pt"
+                    )
                 html_parts.append(f'<p style="{spacer_style}">&nbsp;</p>')
                 para_index += 1
                 continue
@@ -242,7 +540,7 @@ class TextConverter:
         bullet_marker = self._get_bullet_marker(para, autonum_counters)
 
         # Build paragraph styles
-        styles = self._build_paragraph_styles(para, para_index)
+        styles = self._build_paragraph_styles(para, element, para_index)
 
         # Compute the bullet column width from PPT marL (in em, relative to font size).
         # The bullet span gets this as its flex width, so wrapped text aligns at marL.
@@ -283,7 +581,7 @@ class TextConverter:
             HTML string for regular paragraph
         """
         # Build paragraph styles
-        styles = self._build_paragraph_styles(para, para_index)
+        styles = self._build_paragraph_styles(para, element, para_index)
 
         # Build attributes
         attrs = []
@@ -298,12 +596,17 @@ class TextConverter:
 
         return f'<p {attr_str}>{content}</p>'
 
-    def _build_paragraph_styles(self, para, para_index: int = 0) -> list[str]:
+    def _build_paragraph_styles(self, para, element: Optional[TextElement],
+                                para_index: int = 0) -> list[str]:
         """
         Build CSS styles for a paragraph.
 
         Args:
             para: ParagraphElement with styling info
+            element: Parent TextElement (used to resolve inherited font_size
+                when the paragraph has none — PPT free TextBoxes with no
+                <a:rPr sz> on any run and no placeholder lstStyle leave
+                font_size as None at parse time)
             para_index: Index of this paragraph (for first-paragraph handling)
 
         Returns:
@@ -315,7 +618,9 @@ class TextConverter:
             styles.append(f"font-family: '{para.font_name}'")
 
         if para.font_size:
-            styles.append(f"font-size: {para.font_size}pt")
+            styles.append(
+                f"font-size: {para.font_size * self._current_scale}pt"
+            )
 
         if para.bold:
             styles.append("font-weight: bold")
@@ -336,7 +641,34 @@ class TextConverter:
             styles.append(f"line-height: {adjusted_line_height:.2f} !important")
         elif para.line_spacing_pts is not None:
             adjusted_line_height_pts = para.line_spacing_pts * LINE_HEIGHT_ADJUSTMENT
-            styles.append(f"line-height: {adjusted_line_height_pts:.2f}pt !important")
+            # Floor at font-size: PPT's GDI+ tolerates spcPts < font_size
+            # (baseline distance can be smaller than glyph height — adjacent
+            # lines just visually overlap, which PPT renders deliberately).
+            # CSS line boxes cannot shrink below font-size, so emitting the
+            # raw value produces multi-line text with characters from
+            # neighbouring lines stacked on top of each other.
+            #
+            # When the paragraph itself has no font_size, walk up to the
+            # parent text element.  Free TextBoxes with no <a:rPr sz> on
+            # any run and no placeholder lstStyle leave font_size as None
+            # at parse time; without this fallback we'd emit the raw
+            # sub-font-size spcPts and the browser would overlap adjacent
+            # line glyphs (poster.html "Covariance Contribution" block:
+            # 10pt line-spacing on an unsized paragraph stacked lines on
+            # top of each other).
+            #
+            # Apply shrink scale: absolute pt line-height does NOT auto-scale
+            # with font-size in CSS (unlike unitless line-height), so we must
+            # multiply by _current_scale here.  The floor check uses the
+            # scaled font_size to keep CSS line-box semantics consistent.
+            effective_fs_pt = (para.font_size
+                               or (element.font_size if element else None)
+                               or 12.0)
+            scaled_fs = effective_fs_pt * self._current_scale
+            scaled_lh = adjusted_line_height_pts * self._current_scale
+            if scaled_lh < scaled_fs:
+                scaled_lh = scaled_fs
+            styles.append(f"line-height: {scaled_lh:.2f}pt !important")
         else:
             styles.append("line-height: 1 !important")
 
@@ -409,6 +741,18 @@ class TextConverter:
         for run in para.runs:
             run_styles = []
 
+            # Whitespace-only runs (e.g. the "\n" PPT emits as a separate
+            # <a:r> with sz="2400" between bullets in a multi-line
+            # paragraph) must NOT carry a font-size override.  The
+            # override has zero visual effect on whitespace but, per
+            # CSS inline-box rules, any inline element with a larger
+            # font-size grows the line-box vertically — inflating
+            # every line that the run sits on and causing overflow
+            # plus uneven line spacing.  Other style props (color,
+            # bold, etc.) are similarly inert on whitespace, but
+            # font-size is the only one with a layout side-effect.
+            is_ws_only = not (run.text or "").strip()
+
             if run.color is not None and run.color != para.color:
                 run_styles.append(f"color: {run.color}")
             if run.bold is not None and run.bold != para.bold:
@@ -417,8 +761,11 @@ class TextConverter:
                 run_styles.append("font-style: italic" if run.italic else "font-style: normal")
             if run.font_name is not None and run.font_name != para.font_name:
                 run_styles.append(f"font-family: '{run.font_name}'")
-            if run.font_size is not None and run.font_size != para.font_size:
-                run_styles.append(f"font-size: {run.font_size}pt")
+            if (run.font_size is not None and run.font_size != para.font_size
+                    and not is_ws_only):
+                run_styles.append(
+                    f"font-size: {run.font_size * self._current_scale}pt"
+                )
 
             escaped = escape(run.text)
             if run_styles:
@@ -482,7 +829,9 @@ class TextConverter:
             styles.append(f"font-family: '{element.font_name}'")
 
         if element.font_size:
-            styles.append(f"font-size: {element.font_size}pt")
+            styles.append(
+                f"font-size: {element.font_size * self._current_scale}pt"
+            )
 
         if element.bold:
             styles.append("font-weight: bold")
@@ -616,7 +965,12 @@ class TextConverter:
             return para.bullet.char or '\u2022'
 
         if para.bullet.type == 'autonum':
-            return self._format_autonum(para, autonum_counters or {})
+            # `or {}` would discard an empty-but-valid dict (counter at
+            # initial state), resetting the sequence to 1 on every call.
+            # Use `is not None` so we mutate the caller's dict in place.
+            return self._format_autonum(
+                para, autonum_counters if autonum_counters is not None else {}
+            )
 
         if para.bullet.type == 'blip':
             if para.bullet.blip_image_bytes:

@@ -22,7 +22,10 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
-from shuttleslide.agent.html_guide import HTML_AUTHORING_GUIDE
+from shuttleslide.agent.html_guide import (
+    HTML_AUTHORING_GUIDE,
+    build_html_authoring_guide,
+)
 from shuttleslide.agent.tools.slide_tools import _FREE_FORM_HTML_MAX_LEN as _HTML_BUDGET
 
 
@@ -36,30 +39,85 @@ HOUSE RULES (apply to every slide):
   non-default background (image_overlay for hero/cover, gradient for
   section dividers, solid for content slides).
 - Step 2: Call `set_free_form_html(html=...)` ONCE with the complete
-  inner HTML for the slide body. The system wraps it in a 1280x720
-  .ppt-slide container; you provide everything inside.
+  inner HTML for the slide body. The system wraps it in a
+  .ppt-slide container of the canvas dimensions you've been given;
+  you provide everything inside.
 - Step 3: Call `finish_slide` when done.
 - The HTML authoring guide below defines EXACTLY which patterns the
   PPTX converter will recognize (cards, badges, title bars, numbered
   steps, bullet lists, etc.). Reuse those patterns.
-- Color management: pull literal hex values from the THEME block and use
-  them in inline styles. NEVER invent colors that aren't in the theme.
+- Root wrapper background: the OUTERMOST `<div>` of your HTML (the
+  `w-full h-full` wrapper around the slide body) MUST NOT set a
+  non-theme background-color. Either omit `background-color` entirely
+  (the outer `.ppt-slide` container provides `theme.bg_color` and will
+  show through) or write `background-color: {{theme.bg_color}};`
+  explicitly. NEVER write a literal hex like `#FFFFFF` or `#F8F9FA` on
+  the root — it covers the slide background and breaks theme edits.
+  Inner cards / panels / badges may use literals freely.
+- Color management: ALWAYS use `{{theme.<field>}}` placeholders for
+  theme colors and fonts in inline styles — NEVER hardcode hex from the
+  THEME block. The renderer substitutes the live value at render time,
+  so the slide tracks theme edits without re-generation. Tokens:
+  {{theme.primary_color}}, {{theme.accent_color}}, {{theme.warn_color}},
+  {{theme.bg_color}}, {{theme.text_color}}, {{theme.title_color}},
+  {{theme.font_title}}, {{theme.font_body}}. Derived:
+  {{theme.<color>_rgba:<alpha>}} (e.g. {{theme.primary_rgba:0.2}}),
+  {{theme.<color>_darken:<factor>}}. Place tokens wherever a hex string
+  or font name would appear: color:, background:, border:,
+  linear-gradient(...), font-family:, inside rgba(). The HTML AUTHORING
+  GUIDE has full placeholder rules. Non-theme neutrals (grays, pure
+  black overlays) stay as literals.
 - Font sizes: always inline px (e.g. style="font-size: 24px"). NEVER use
   rem/em or Tailwind text-size classes — they break the px->pt converter.
 - Content density: 5-15 recognizable elements per slide is the sweet
-  spot. Too few looks empty; too many gets clipped at 720px height.
+  spot. Too few looks empty; too many gets clipped at the canvas
+  height.
 - Tabular data: if you have 2+ rows of the same schema (specs,
   schedules, comparisons with aligned columns), use a real `<table>`.
   NEVER fake tables with flex + spans — that produces disconnected
   text_boxes with no row/column structure.
-- Stay inside 1280x720. The browser clips overflow — if a column runs
-  past 720px the bottom items disappear.
+- Stay inside the canvas dimensions. The browser clips overflow — if
+  a column runs past the canvas height the bottom items disappear.
 """
 
 
 # ---------------------------------------------------------------------------
 # Stage 1: Theme Designer
 # ---------------------------------------------------------------------------
+
+# layout_conventions example, injected into THEME_DESIGNER_PROMPT based on
+# canvas orientation. The example is the single strongest steer on how the
+# LLM writes `layout_conventions`, and `layout_conventions` is then injected
+# into every downstream slide_builder call — so a landscape-only example
+# here drags the whole deck toward landscape composition even on a portrait
+# canvas. Keep these in sync with _LAYOUT_LANDSCAPE / _LAYOUT_PORTRAIT /
+# _LAYOUT_SQUARE in html_guide.py.
+_LAYOUT_CONVENTIONS_LANDSCAPE = (
+    'e.g. "title bar at top with gradient, two-column body, '
+    'dashed divider between columns"'
+)
+_LAYOUT_CONVENTIONS_PORTRAIT = (
+    'e.g. "hero block (image or large icon) anchoring the top ~40%, '
+    'single-column narrative flow below, 3-5 stacked cards with dashed '
+    'dividers between sections" — portrait canvases are tall, so prefer '
+    'stacking over side-by-side; NEVER propose two-column or multi-column '
+    'body layouts'
+)
+_LAYOUT_CONVENTIONS_SQUARE = (
+    'e.g. "centered focal composition, symmetric top/bottom distribution, '
+    '2x2 card grid for parallel items"'
+)
+
+
+def _layout_conventions_hint(canvas_width_px: int, canvas_height_px: int) -> str:
+    """Pick the layout_conventions example matching the canvas orientation."""
+    w, h = canvas_width_px, canvas_height_px
+    if h > w:
+        return _LAYOUT_CONVENTIONS_PORTRAIT
+    if w > h:
+        return _LAYOUT_CONVENTIONS_LANDSCAPE
+    return _LAYOUT_CONVENTIONS_SQUARE
+
 
 THEME_DESIGNER_PROMPT = """\
 You are a senior presentation designer. Your job is to define the global \
@@ -72,12 +130,17 @@ OUTPUT: Call the `define_theme` tool ONCE with all fields. Do not call any \
 other tool.
 
 THEME FIELDS:
-- primary_color: main brand color (hex like #133EFF). Used for titles, bars, primary accents.
-- accent_color: secondary highlight color (e.g. #00CD82). Used for icons, dividers, key data.
-- warn_color: alert/problem color (e.g. #FF5722). Used sparingly for warnings or contrasts.
-- bg_color: default slide background (light decks: #FEFEFE; dark decks: #0a0e27).
-- text_color: default body text color (must contrast with bg_color).
-- title_color: title text color (often white for dark decks, primary_color for light).
+- primary_color: main brand color, as 6-digit hex (#RRGGBB). Used for titles, bars, \
+primary accents. Pick a color that fits the style hint — do NOT copy any example \
+value verbatim from this prompt.
+- accent_color: secondary highlight color (#RRGGBB). Used for icons, dividers, key data.
+- warn_color: alert/problem color (#RRGGBB). Used sparingly for warnings or contrasts.
+- bg_color: default slide background. Light decks: near-white; dark decks: near-black.
+- text_color: default body text color. MUST contrast with bg_color at WCAG AA \
+(ratio ≥ 4.5:1) — the tool rejects lower ratios.
+- title_color: title text color. MUST contrast with bg_color at WCAG AA \
+(ratio ≥ 3:1 for large text). White or near-white for dark decks; primary_color \
+or a dark variant for light decks.
 - font_title: font for titles (Roboto is safe; consider Playfair Display for elegant, \
 Inter for tech, Noto Sans SC for Chinese).
 - font_body: font for body text.
@@ -86,8 +149,7 @@ Inter for tech, Noto Sans SC for Chinese).
 - cover_bg_strategy: how the title slide background should look. One of:
   "dark_gradient", "image_overlay", "solid_color", "geometric".
 - layout_conventions: a short description (1-3 sentences) of how content slides \
-should be laid out (e.g. "title bar at top with gradient, two-column body, \
-dashed divider between columns").
+should be laid out ({layout_conventions_hint}).
 
 STYLE HINT: "{style_hint}"
 TOPIC: "{topic}"
@@ -101,6 +163,140 @@ Pick colors and fonts that fit the style hint. For example:
 
 Decide confidently. Do not hedge.
 """
+
+
+# ---------------------------------------------------------------------------
+# Layout examples shared across Stage 2 prompts (one-shot + progressive).
+#
+# Same logic as _layout_conventions_hint above: the layout_hint examples in
+# OUTLINE_PLANNER_PROMPT and the layout_intent / LAYOUT DIVERSITY examples
+# in the progressive prompts were originally landscape-only ("2-column
+# grid", "3-card horizontal grid"). On a portrait canvas those examples
+# drag the outline toward landscape composition. Each set below is picked
+# by canvas orientation.
+# ---------------------------------------------------------------------------
+
+_LAYOUT_HINT_EXAMPLES_LANDSCAPE = """\
+Examples:
+    * "Full-bleed hero cover with big icon, title, subtitle, and 3 tech \\
+       tag pills at the bottom. Background image with dark gradient overlay."
+    * "Title bar at top, then a 2-column grid: left column is a card with \\
+       a key concept, right column is a vertical numbered list of 4 steps."
+    * "Section divider: huge ghosted '02' number in background, heading \\
+       and one-line description centered."
+    * "Title bar, then a 3-card horizontal grid showing three options, \\
+       each with an icon, title, and 2 bullet points. Bottom dashed \\
+       insight banner with the key takeaway."
+    * "Synthesis slide: centered check_circle icon, big takeaway h1, \\
+       three small recap pills (one per argument group), and a Q&A subtitle."\
+"""
+
+_LAYOUT_HINT_EXAMPLES_PORTRAIT = """\
+Examples (PORTRAIT canvas — stack vertically, never multi-column):
+    * "Hero cover: full-bleed image or large icon anchoring the top ~40%, \\
+       title + subtitle + 3 tag pills stacked in a single column below. \\
+       Background image with dark gradient overlay."
+    * "Title block at top, then 3 stacked cards (one per key_point) each \\
+       with icon-left + text-right, connected by dashed dividers down the page."
+    * "Section divider: huge ghosted '02' number occupying the top half, \\
+       heading + one-line description centered below."
+    * "Synthesis slide: large check_circle icon at top, big takeaway h1 \\
+       centered, three small recap pills stacked vertically, Q&A subtitle \\
+       pinned near the bottom."
+NEVER propose two-column / grid-cols-2+ / horizontal-multi-card layouts on \
+a portrait canvas — columns become too narrow for readable text.\
+"""
+
+_LAYOUT_HINT_EXAMPLES_SQUARE = """\
+Examples (SQUARE canvas — symmetric, centered focal works best):
+    * "Hero cover: centered focal image or large icon, title + subtitle \\
+       stacked below, 2x2 tag pill grid at the bottom."
+    * "Title block at top, then a 2x2 card grid (4 parallel concepts) \\
+       with dashed cross dividers."
+    * "Section divider: huge ghosted '02' number centered, heading + \\
+       one-line description below."
+    * "Synthesis slide: large check_circle icon centered, big takeaway h1 \\
+       below, four small recap pills in a 2x2 grid."\
+"""
+
+
+def _layout_hint_examples(canvas_width_px: int, canvas_height_px: int) -> str:
+    """Pick the layout_hint example block matching the canvas orientation."""
+    w, h = canvas_width_px, canvas_height_px
+    if h > w:
+        return _LAYOUT_HINT_EXAMPLES_PORTRAIT
+    if w > h:
+        return _LAYOUT_HINT_EXAMPLES_LANDSCAPE
+    return _LAYOUT_HINT_EXAMPLES_SQUARE
+
+
+# layout_intent tag list for STRUCTURE_PLANNER_PROMPT (1-3 word tags).
+# Same orientation rule — the old hard-coded list ("two_column_compare",
+# "title_bar_3_cards") was landscape-only.
+_LAYOUT_INTENT_TAGS_LANDSCAPE = (
+    '"hero_cover", "two_column_compare", "section_divider", '
+    '"title_bar_3_cards", "numbered_steps"'
+)
+_LAYOUT_INTENT_TAGS_PORTRAIT = (
+    '"hero_cover", "stacked_cards", "section_divider", '
+    '"title_bar_numbered_steps", "single_column_narrative"'
+)
+_LAYOUT_INTENT_TAGS_SQUARE = (
+    '"hero_cover", "grid_2x2", "section_divider", '
+    '"centered_focal", "numbered_steps"'
+)
+
+
+def _layout_intent_tags(canvas_width_px: int, canvas_height_px: int) -> str:
+    """Pick the layout_intent tag list matching the canvas orientation."""
+    w, h = canvas_width_px, canvas_height_px
+    if h > w:
+        return _LAYOUT_INTENT_TAGS_PORTRAIT
+    if w > h:
+        return _LAYOUT_INTENT_TAGS_LANDSCAPE
+    return _LAYOUT_INTENT_TAGS_SQUARE
+
+
+# LAYOUT DIVERSITY block for SLIDE_DETAIL_GENERATOR_PROMPT. The default
+# block told the LLM to "try a 2-column compare" / "3-card grid" — both
+# landscape idioms. The portrait variant steers toward vertical variation.
+_LAYOUT_DIVERSITY_LANDSCAPE = """\
+LAYOUT DIVERSITY:
+  - DO NOT copy the previous slide's layout structure verbatim.
+  - Vary: column count, card vs list vs table, hero position, accent placement.
+  - If the previous slide was a 3-card grid, try a 2-column compare, a \\
+numbered list, or a title-bar-with-bullets.\
+"""
+
+_LAYOUT_DIVERSITY_PORTRAIT = """\
+LAYOUT DIVERSITY (PORTRAIT canvas — every layout stacks vertically):
+  - DO NOT copy the previous slide's layout structure verbatim.
+  - Vary: hero position (top full-bleed vs top-half), card count (3 vs 4 \\
+stacked), accent placement, divider style.
+  - If the previous slide was 3 stacked cards, try a hero-top + \\
+single-column narrative, a title-bar-with-numbered-steps, or a centered \\
+focal quote. NEVER switch to a multi-column / grid-cols-2+ layout to vary \\
+things — on a portrait canvas that just produces unreadable columns.\
+"""
+
+_LAYOUT_DIVERSITY_SQUARE = """\
+LAYOUT DIVERSITY:
+  - DO NOT copy the previous slide's layout structure verbatim.
+  - Vary: 2x2 grid vs centered focal vs symmetric top/bottom split, accent \\
+placement, divider style.
+  - If the previous slide was a 2x2 grid, try a centered focal, a stacked \\
+single-column, or a symmetric top/bottom split.\
+"""
+
+
+def _layout_diversity_hint(canvas_width_px: int, canvas_height_px: int) -> str:
+    """Pick the LAYOUT DIVERSITY block matching the canvas orientation."""
+    w, h = canvas_width_px, canvas_height_px
+    if h > w:
+        return _LAYOUT_DIVERSITY_PORTRAIT
+    if w > h:
+        return _LAYOUT_DIVERSITY_LANDSCAPE
+    return _LAYOUT_DIVERSITY_SQUARE
 
 
 # ---------------------------------------------------------------------------
@@ -123,18 +319,7 @@ Each slide in the outline has:
   single source of truth for slide content.
 - layout_hint: a short free-text description of the desired visual
   structure. Be specific — this hint guides the slide-builder's HTML
-  design. Examples:
-    * "Full-bleed hero cover with big icon, title, subtitle, and 3 tech
-       tag pills at the bottom. Background image with dark gradient overlay."
-    * "Title bar at top, then a 2-column grid: left column is a card with
-       a key concept, right column is a vertical numbered list of 4 steps."
-    * "Section divider: huge ghosted '02' number in background, heading
-       and one-line description centered."
-    * "Title bar, then a 3-card horizontal grid showing three options,
-       each with an icon, title, and 2 bullet points. Bottom dashed
-       insight banner with the key takeaway."
-    * "Synthesis slide: centered check_circle icon, big takeaway h1,
-       three small recap pills (one per argument group), and a Q&A subtitle."
+  design. {layout_hint_examples}
 
 PYRAMID PRINCIPLE (金字塔原理 — 总·分·总):
 Every deck MUST follow Overview -> Decomposition -> Synthesis.
@@ -315,6 +500,8 @@ STYLE HINT: "{style_hint}"
 
 THEME (for color/layout reference): {theme_json}
 
+{user_image_library_block}
+
 {final_count_instruction}
 """
 
@@ -326,10 +513,13 @@ THEME (for color/layout reference): {theme_json}
 SLIDE_BUILDER_PROMPT = """\
 You are a presentation designer building ONE slide by authoring its HTML.
 You write the inner HTML of the slide; the system wraps it in a fixed
-1280x720 .ppt-slide container.
+{canvas_width_px}x{canvas_height_px} .ppt-slide container.
 
 You will be given:
-1. The global THEME — use these EXACT colors/fonts in inline styles.
+1. The global THEME — reference its fields as `{{theme.<field>}}`
+   placeholders in your inline styles (see HOUSE RULES + HTML AUTHORING
+   GUIDE for the placeholder rules). The renderer substitutes live
+   values at render time.
 2. This slide's OUTLINE (title, purpose, key_points, layout_hint).
 3. Your slide index and the total slide count.
 4. PRE-GENERATED SVG snippets (if any) that MUST appear in your HTML
@@ -354,7 +544,9 @@ INSTRUCTIONS:
 
 {images_block}
 
-THEME (use these EXACT colors/fonts — do not deviate):
+THEME (current values for contrast reasoning — reference these fields as
+{{theme.<field>}} placeholders in your HTML; the renderer substitutes the
+live value at render time, so the slide tracks theme edits):
 {theme_json}
 
 YOUR SLIDE (index {slide_index} of {total_count}):
@@ -367,6 +559,72 @@ YOUR SLIDE (index {slide_index} of {total_count}):
 {html_guide}
 
 Author the slide HTML now.
+"""
+
+
+# ---------------------------------------------------------------------------
+# Stage 3: Slide Builder — INCREMENTAL update (review pipeline regenerate)
+# ---------------------------------------------------------------------------
+#
+# Used by InteractiveOrchestrator.regenerate_item when the user clicks
+# "Update this slide" on a stale mark. Preserves user manual edits by
+# showing the LLM the current HTML and asking it to apply only the
+# minimum changes needed to reflect the upstream diff.
+#
+# Pairs with ``build_slide_builder_incremental_prompt`` below, which
+# assembles before/after outline context (and optionally before/after
+# theme) from the stale mark's ``context_snapshot``.
+SLIDE_BUILDER_INCREMENTAL_PROMPT = """\
+You are updating an EXISTING slide's HTML based on upstream changes.
+The current HTML may contain user customizations you MUST preserve.
+
+CURRENT SLIDE HTML (may include user edits):
+<div class="ppt-slide">
+{current_html}
+</div>
+
+UPSTREAM CHANGE CONTEXT:
+- Outline for this slide:
+  - Before: {old_outline_json}
+  - After:  {new_outline_json}
+{optional_theme_change_section}
+
+YOUR TASK:
+1. Identify what specifically changed in the outline (reworded key_points,
+   added/removed points, title change, layout_hint change).
+2. Apply ONLY the changes needed to reflect the new outline.
+3. PRESERVE everything else:
+   - User's manual text edits (unless directly contradicted by new outline)
+   - Structural choices (cards, badges, tables, layout patterns)
+   - Inline styles, classes, decoration choices
+   - SVG/image placements and wrappers
+
+ANTI-PATTERNS (do NOT do these):
+- Do NOT rewrite the slide from scratch
+- Do NOT reorganize the layout unless layout_hint changed
+- Do NOT "improve" wording that wasn't part of the outline change
+- Do NOT convert user's literal colors to {{{{theme.*}}}} placeholders
+- Do NOT touch SVG wrappers or image positioning
+- Do NOT remove decorative elements (badges, icons, gradients) you didn't add
+
+{house_rules}
+
+{images_block}
+
+THEME (current values — reference via {{{{theme.<field>}}}} placeholders):
+{theme_json}
+
+YOUR SLIDE (index {slide_index} of {total_count}):
+- title: {title}
+- purpose: {purpose}
+- layout_hint: {layout_hint}
+- key_points:
+{key_points_formatted}
+
+{html_guide}
+
+Call `set_free_form_html(html=...)` ONCE with the updated HTML. Call \
+`finish_slide` when done.
 """
 
 
@@ -425,11 +683,12 @@ triggers a retry):
   NO <foreignObject>, NO animations, NO <style>, NO <script>. \
   Drop shadows / glow on icons MUST use <filter> inside <defs> with \
   these primitives only: feDropShadow, feGaussianBlur, feOffset, \
-  feFlood, feFuncA. NO feColorMatrix, \
+  feFlood, feFuncA, feComponentTransfer (as feFuncA container), \
+  feMerge / feMergeNode (to compose the shadow behind SourceGraphic). \
+  NO feColorMatrix, \
   feTurbulence, feDisplacementMap, feComposite, feBlend, feImage, \
-  feComponentTransfer, feMorphology, feSpecularLighting, \
-  feDiffuseLighting, feMerge, feMergeNode — the converter silently \
-  drops them. \
+  feMorphology, feSpecularLighting, \
+  feDiffuseLighting — the converter silently drops them. \
   Hatched / cross-hatch fills use <pattern> inside <defs>, referenced \
   via fill="url(#...)". Clipped shapes use <clipPath> inside <defs>, \
   referenced via clip-path="url(#...)".
@@ -476,8 +735,16 @@ Draw the {image_type} now.
 def build_theme_designer_prompt(
     topic: str,
     style_hint: str,
+    canvas_width_px: int = 1280,
+    canvas_height_px: int = 720,
 ) -> str:
-    return THEME_DESIGNER_PROMPT.format(topic=topic, style_hint=style_hint)
+    return THEME_DESIGNER_PROMPT.format(
+        topic=topic,
+        style_hint=style_hint,
+        layout_conventions_hint=_layout_conventions_hint(
+            canvas_width_px, canvas_height_px
+        ),
+    )
 
 
 def build_outline_planner_prompt(
@@ -485,6 +752,9 @@ def build_outline_planner_prompt(
     style_hint: str,
     target_count: Optional[int],
     theme: Dict[str, Any],
+    user_image_library: Optional[List[Dict[str, Any]]] = None,
+    canvas_width_px: int = 1280,
+    canvas_height_px: int = 720,
 ) -> str:
     theme_json = json.dumps(theme, ensure_ascii=False, indent=2)
     if target_count is not None:
@@ -510,6 +780,8 @@ def build_outline_planner_prompt(
         count_instruction=count_instruction,
         final_count_instruction=final_count_instruction,
         theme_json=theme_json,
+        user_image_library_block=_format_user_image_library_block(user_image_library),
+        layout_hint_examples=_layout_hint_examples(canvas_width_px, canvas_height_px),
     )
 
 
@@ -568,9 +840,11 @@ SHOULD almost always have image_intent="hero" — only pick "none" if the \
 topic is highly abstract (e.g. a philosophy lecture, a math proof).
 
 LAYOUT_INTENT is a 1-3 word tag for the visual structure (e.g. \
-"hero_cover", "two_column_compare", "section_divider", "title_bar_3_cards", \
-"numbered_steps"). The detail stage will expand this into a concrete \
-layout_hint. Vary layout_intent across consecutive slides.
+{layout_intent_tags}). The detail stage will expand this into a concrete \
+layout_hint. Vary layout_intent across consecutive slides. The tag list \
+above is already filtered to fit the canvas shape — vertical-stack tags \
+on portrait canvases, wide-canvas tags on landscape, symmetric tags on \
+square. Stay within the listed vocabulary.
 
 GROUP design (MECE):
   - Mutually Exclusive: no slide belongs to two groups.
@@ -640,11 +914,7 @@ KEY_POINTS QUALITY:
   - 2-5 points; 3 is the sweet spot for content slides.
   - Key_points must support the slide's purpose — not just be topically related.
 
-LAYOUT DIVERSITY:
-  - DO NOT copy the previous slide's layout structure verbatim.
-  - Vary: column count, card vs list vs table, hero position, accent placement.
-  - If the previous slide was a 3-card grid, try a 2-column compare, a \
-numbered list, or a title-bar-with-bullets.
+{layout_diversity_hint}
 
 IMAGE PLANNING (only when image_intent != "none"):
   Pick source_type by SUBJECT — see SOURCE DECISION below. Each image \
@@ -679,9 +949,49 @@ vector drawing? If yes -> web. If the meaning is in boxes-arrows-numbers \
 -> svg. NEVER default to svg when the subject is a real scene, product, \
 person, place, brand, or texture.
 
+{user_image_library_block}
+
 THEME (use these EXACT colors/fonts in any inline styles referenced): \
 {theme_json}
 """
+
+
+def _format_user_image_library_block(
+    user_image_library: Optional[List[Dict[str, Any]]],
+) -> str:
+    """Render the user-uploaded library as a force-priority prompt section.
+
+    Returns an empty string when no library is supplied — the prompt
+    reads identically to the legacy shape and the LLM behaves as before.
+    When non-empty, the LLM is REQUIRED to consume every entry before
+    falling back to svg/web for remaining slots.
+    """
+    if not user_image_library:
+        return ""
+    lines = [
+        "USER-UPLOADED IMAGE LIBRARY (source_type='user_upload'):",
+        "  You have a curated library below. These images MUST be placed",
+        "  before any svg/web spec — every library entry needs to land on",
+        "  a slide. Match each one to the slot whose semantic need is the",
+        "  closest fit (don't bunch them all onto one slide; spread across",
+        "  hero / illustration slots as the content allows). Only after",
+        "  every library image is assigned may remaining slots use",
+        "  source_type='svg' or 'web'.",
+        "",
+    ]
+    for entry in user_image_library:
+        image_id = entry.get("image_id", "?")
+        desc = (entry.get("description") or "").strip() or "(no description)"
+        fname = entry.get("original_filename") or ""
+        mime = entry.get("mime") or ""
+        lines.append(
+            f'  - image_id="{image_id}"  {desc}  [{fname} {mime}]'.rstrip()
+        )
+    lines.append("")
+    lines.append("To use one, emit a spec with:")
+    lines.append("  source_type=\"user_upload\", source_ref=\"<image_id>\",")
+    lines.append('  description="<the library description verbatim>".')
+    return "\n".join(lines)
 
 
 def build_structure_planner_prompt(
@@ -689,6 +999,8 @@ def build_structure_planner_prompt(
     style_hint: str,
     target_count: Optional[int],
     theme: Dict[str, Any],
+    canvas_width_px: int = 1280,
+    canvas_height_px: int = 720,
 ) -> str:
     """Format STRUCTURE_PLANNER_PROMPT for a given topic/target/theme.
 
@@ -719,6 +1031,7 @@ def build_structure_planner_prompt(
         count_instruction=count_instruction,
         final_count_instruction=final_count_instruction,
         theme_json=theme_json,
+        layout_intent_tags=_layout_intent_tags(canvas_width_px, canvas_height_px),
     )
 
 
@@ -728,14 +1041,18 @@ def _format_previous_slides_block(
     """Render a compact summary of already-generated slides for layout diversity.
 
     The detail generator sees prior slides' titles + layout_hints so it
-    can actively avoid repeating them. Returns an empty-ish block when
-    prev_slides is empty (slide_index == 0 case).
+    can actively avoid repeating them. Also surfaces user_upload
+    image_ids already consumed, so the LLM doesn't re-assign a library
+    entry that's already been placed on an earlier slide (the library is
+    a fixed set — each entry can only land once). Returns an empty-ish
+    block when prev_slides is empty (slide_index == 0 case).
     """
     if not prev_slides:
         return (
             "PREVIOUS SLIDES: (this is slide 1 — no prior layouts to avoid)"
         )
     lines = ["PREVIOUS SLIDES (avoid repeating these layouts):"]
+    consumed_user_ids: List[str] = []
     for i, s in enumerate(prev_slides):
         title = s.get("title", "(untitled)")
         layout = s.get("layout_hint", "(no layout)")
@@ -748,6 +1065,19 @@ def _format_previous_slides_block(
         )
         img_note = f" [images: {', '.join(img_types)}]" if img_types else ""
         lines.append(f'  slide {i + 1}: "{title}" — layout: {layout}{img_note}')
+        for img in (s.get("images") or []):
+            if not isinstance(img, dict):
+                continue
+            if img.get("source_type") == "user_upload":
+                ref = img.get("source_ref") or ""
+                if ref and ref not in consumed_user_ids:
+                    consumed_user_ids.append(ref)
+    if consumed_user_ids:
+        lines.append("")
+        lines.append(
+            "Already-placed user library image_ids (do NOT reuse): "
+            + ", ".join(consumed_user_ids)
+        )
     return "\n".join(lines)
 
 
@@ -759,6 +1089,9 @@ def build_slide_detail_generator_prompt(
     deck_skeleton: Optional[Dict[str, Any]],
     topic: str,
     theme: Dict[str, Any],
+    user_image_library: Optional[List[Dict[str, Any]]] = None,
+    canvas_width_px: int = 1280,
+    canvas_height_px: int = 720,
 ) -> str:
     """Format SLIDE_DETAIL_GENERATOR_PROMPT for one slide.
 
@@ -768,6 +1101,9 @@ def build_slide_detail_generator_prompt(
     with detail by prior Stage 2b iterations).
     ``deck_skeleton`` carries thesis / groups so the detail LLM sees
     the deck-wide context without re-planning it.
+    ``user_image_library`` (when non-empty) is injected as a force-
+    priority section: the LLM must consume every library entry across
+    the deck before falling back to svg/web for remaining slots.
     """
     theme_json = json.dumps(theme, ensure_ascii=False, indent=2)
 
@@ -805,6 +1141,8 @@ def build_slide_detail_generator_prompt(
         deck_groups_summary=groups_summary,
         previous_slides_block=_format_previous_slides_block(prev_slides),
         theme_json=theme_json,
+        user_image_library_block=_format_user_image_library_block(user_image_library),
+        layout_diversity_hint=_layout_diversity_hint(canvas_width_px, canvas_height_px),
     )
 
 
@@ -814,6 +1152,8 @@ def build_slide_builder_prompt(
     slide_index: int,
     total_count: int,
     slide_images: Optional[Dict[str, Dict[str, Any]]] = None,
+    canvas_width_px: int = 1280,
+    canvas_height_px: int = 720,
 ) -> str:
     theme_json = json.dumps(theme, ensure_ascii=False, indent=2)
     key_points = outline.get("key_points", [])
@@ -840,8 +1180,94 @@ def build_slide_builder_prompt(
         purpose=outline.get("purpose", ""),
         layout_hint=outline.get("layout_hint", ""),
         key_points_formatted=key_points_formatted,
-        html_guide=HTML_AUTHORING_GUIDE,
+        canvas_width_px=canvas_width_px,
+        canvas_height_px=canvas_height_px,
+        html_guide=build_html_authoring_guide(canvas_width_px, canvas_height_px),
         images_block=images_block,
+    )
+
+
+def build_slide_builder_incremental_prompt(
+    *,
+    current_html: str,
+    new_outline: Dict[str, Any],
+    old_outline: Optional[Dict[str, Any]],
+    theme_before: Optional[Dict[str, Any]] = None,
+    theme_after: Optional[Dict[str, Any]] = None,
+    slide_index: int = 0,
+    total_count: int = 1,
+    slide_images: Optional[Dict[str, Dict[str, Any]]] = None,
+    canvas_width_px: int = 1280,
+    canvas_height_px: int = 720,
+) -> str:
+    """Build the incremental slide-builder prompt for review regenerate.
+
+    The user clicked "Update this slide" on a stale mark after editing
+    upstream (outline or theme semantic fields). We show the LLM the
+    current HTML + before/after upstream state and ask it to apply only
+    the changes implied by the diff — preserving any manual user edits.
+
+    ``old_outline`` and ``theme_before`` come from the stale mark's
+    ``context_snapshot`` (captured at edit time). If either is missing
+    (older stale mark, or theme didn't change), we fall back gracefully:
+
+      - ``old_outline=None`` → only show ``new_outline`` (the LLM gets
+        less context but can still regen against current upstream).
+      - ``theme_before`` / ``theme_after`` both None → omit the theme
+        change section entirely.
+
+    ``slide_images`` is the current ``state.slide_images[idx]`` — kept
+    so any pre-generated SVG/image placeholders stay accessible in
+    case the upstream change needs to reposition them.
+    """
+    # Use new_outline's image specs (if any) for image_type lookup. Old
+    # outline images don't matter for incremental — we render current
+    # state and let the LLM preserve existing <img> wrappers.
+    image_types = {
+        img["slot_id"]: img.get("image_type", "illustration")
+        for img in new_outline.get("images", [])
+        if isinstance(img, dict) and "slot_id" in img
+    }
+    images_block = _format_images_block(slide_images or {}, image_types)
+    theme_json = json.dumps(theme_after or {}, ensure_ascii=False, indent=2)
+    key_points = new_outline.get("key_points", [])
+    if isinstance(key_points, list):
+        key_points_formatted = "\n".join(f"  - {p}" for p in key_points)
+    else:
+        key_points_formatted = f"  - {key_points}"
+
+    # Build the optional theme-change section: included only if both
+    # before/after were snapshotted and they differ on semantic fields.
+    optional_theme_change_section = ""
+    if (
+        theme_before is not None
+        and theme_after is not None
+        and theme_before != theme_after
+    ):
+        before_json = json.dumps(theme_before, ensure_ascii=False, indent=2)
+        after_json = json.dumps(theme_after, ensure_ascii=False, indent=2)
+        optional_theme_change_section = (
+            f"- Theme (semantic fields changed — affects layout decisions):\n"
+            f"  - Before: {before_json}\n"
+            f"  - After:  {after_json}"
+        )
+    old_outline_json = json.dumps(old_outline or {}, ensure_ascii=False, indent=2)
+    new_outline_json = json.dumps(new_outline, ensure_ascii=False, indent=2)
+    return SLIDE_BUILDER_INCREMENTAL_PROMPT.format(
+        current_html=current_html,
+        old_outline_json=old_outline_json,
+        new_outline_json=new_outline_json,
+        optional_theme_change_section=optional_theme_change_section,
+        house_rules=HOUSE_RULES,
+        images_block=images_block,
+        theme_json=theme_json,
+        slide_index=slide_index,
+        total_count=total_count,
+        title=new_outline.get("title", ""),
+        purpose=new_outline.get("purpose", ""),
+        layout_hint=new_outline.get("layout_hint", ""),
+        key_points_formatted=key_points_formatted,
+        html_guide=build_html_authoring_guide(canvas_width_px, canvas_height_px),
     )
 
 

@@ -42,9 +42,12 @@ ALLOWED_IMAGE_TYPES = ("hero", "flowchart", "diagram", "illustration", "icon_clu
 # behaviour (LLM generates inline SVG → converted to native PPT shapes).
 # "web" routes the spec through the image acquirer's web path (image
 # search API → download → VLM verification), with fallback to "svg" if
-# acquisition or VLM verification fails. Kept distinct from `image_type`
-# because the same `image_type` (e.g. hero) can come from either source.
-ALLOWED_SOURCE_TYPES = ("svg", "web")
+# acquisition or VLM verification fails. "user_upload" pulls from the
+# user_image_library the user pre-staged on the homepage — the outline
+# planner is REQUIRED to use every library entry before falling back to
+# svg/web for remaining slots. Kept distinct from `image_type` because
+# the same `image_type` (e.g. hero) can come from either source.
+ALLOWED_SOURCE_TYPES = ("svg", "web", "user_upload")
 
 # When source_type="web", source_ref may be a http(s) URL or a free-text
 # search query. URL values route through playwright screenshot; query
@@ -60,8 +63,10 @@ _SOURCE_REF_URL_RE = re.compile(r"^https?://", re.IGNORECASE)
         "layout_hint (a free-text description of the desired visual structure), "
         "and optionally images (0-3 specs). Each image spec declares a "
         "source_type: 'svg' (LLM-generated inline SVG → editable native PPT "
-        "shapes) or 'web' (fetched from a web image search and verified by a "
-        "VLM). source_type='web' requires source_ref (search query or URL)."
+        "shapes), 'web' (fetched from a web image search and verified by a "
+        "VLM), or 'user_upload' (from the user's pre-staged image library — "
+        "REQUIRED to use every library entry before falling back to svg/web). "
+        "source_type='web' / 'user_upload' require source_ref."
     ),
     params={
         "type": "object",
@@ -138,6 +143,10 @@ _SOURCE_REF_URL_RE = re.compile(r"^https?://", re.IGNORECASE)
                                             "to svg). 'svg' = LLM-generated inline "
                                             "SVG (use for geometry, flowcharts, "
                                             "diagrams, charts, abstract structure). "
+                                            "'user_upload' = pull from the user-"
+                                            "uploaded image library listed in the "
+                                            "system prompt — REQUIRED to use every "
+                                            "library entry before any other source. "
                                             "Default to 'web' when the subject is "
                                             "photorealistic — do NOT default to svg "
                                             "for real-world subjects."
@@ -146,12 +155,15 @@ _SOURCE_REF_URL_RE = re.compile(r"^https?://", re.IGNORECASE)
                                     "source_ref": {
                                         "type": "string",
                                         "description": (
-                                            "Required when source_type='web'. Either "
-                                            "a search query (e.g. 'modern coffee shop "
-                                            "interior') or an absolute https URL. URL "
-                                            "routes through playwright screenshot; "
-                                            "query routes through image search. "
-                                            "Ignored when source_type='svg'."
+                                            "Required when source_type is 'web' or "
+                                            "'user_upload'. For 'web': a search "
+                                            "query (e.g. 'modern coffee shop "
+                                            "interior') or an absolute https URL — "
+                                            "URL routes through playwright "
+                                            "screenshot; query routes through image "
+                                            "search. For 'user_upload': the "
+                                            "image_id of a library entry. Ignored "
+                                            "when source_type='svg'."
                                         ),
                                     },
                                     "description": {
@@ -280,12 +292,17 @@ async def define_outline(params: Dict[str, Any], ctx: Dict[str, Any]) -> ToolRes
                         f"one of {ALLOWED_SOURCE_TYPES} (got {source_type!r})"
                     )
                 source_ref = spec.get("source_ref", "")
-                if source_type == "web":
+                if source_type in ("web", "user_upload"):
                     if not isinstance(source_ref, str) or not source_ref.strip():
+                        ref_hint = (
+                            "a search query or an absolute https URL"
+                            if source_type == "web"
+                            else "the image_id from the user-uploaded library"
+                        )
                         return ToolResult.failure(
                             f"slide {i + 1} image {slot_id!r}: source_ref is "
-                            f"required when source_type='web' (provide a search "
-                            f"query or an absolute https URL)"
+                            f"required when source_type={source_type!r} "
+                            f"(provide {ref_hint})"
                         )
                     source_ref = source_ref.strip()
                 else:
@@ -404,12 +421,17 @@ def _validate_image_spec(spec: Any, slide_idx_label: str, slot_j: int) -> Dict[s
             f"one of {ALLOWED_SOURCE_TYPES} (got {source_type!r})"
         )
     source_ref = spec.get("source_ref", "")
-    if source_type == "web":
+    if source_type in ("web", "user_upload"):
         if not isinstance(source_ref, str) or not source_ref.strip():
+            ref_hint = (
+                "a search query or an absolute https URL"
+                if source_type == "web"
+                else "the image_id from the user-uploaded library"
+            )
             raise ValueError(
                 f"{slide_idx_label} image {slot_id!r}: source_ref is "
-                f"required when source_type='web' (provide a search "
-                f"query or an absolute https URL)"
+                f"required when source_type={source_type!r} (provide "
+                f"{ref_hint})"
             )
         source_ref = source_ref.strip()
     else:

@@ -20,6 +20,7 @@ from shuttleslide.agent.html_contract import (
     FORBIDDEN_TAILWIND_CLASSES,
 )
 from shuttleslide.agent.tools.registry import ToolResult, tool
+from shuttleslide.agent.theme_tokens import validate_theme_tokens
 from shuttleslide.html_to_pptx.schema import SlideDSL
 
 
@@ -187,6 +188,74 @@ def _lint_tailwind_classes(html: str) -> List[str]:
     return errors
 
 
+# Regex to find the opening tag of the HTML's root element. Skips leading
+# HTML comments and whitespace so it lands on the actual outermost tag
+# (LLM slide HTML almost always starts with <!-- comment --> or <div>).
+_ROOT_DIV_RE = re.compile(
+    r"\A\s*(?:<!--.*?-->\s*)*<div\b[^>]*>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _lint_root_div_background(html: str) -> List[str]:
+    """Reject literal background-color on the outermost wrapper div.
+
+    The slide's overall background is controlled by the `.ppt-slide`
+    container (which reads `theme.bg_color` at render time). A literal
+    hex on the root wrapper masks that container, so theme edits stop
+    propagating to the slide. The root must either omit background
+    entirely, use a `{{theme.bg_color}}` token, or use a gradient/url
+    (image-like backgrounds are intentionally allowed — they're
+    design-level decisions that shouldn't follow bg_color).
+
+    Returns an empty list when the root has no literal bg, or a single
+    error string explaining the violation.
+    """
+    m = _ROOT_DIV_RE.match(html)
+    if not m:
+        return []  # Root isn't a <div> — outside this rule's scope.
+    opening_tag = m.group(0)
+    style_m = re.search(
+        r"\bstyle\s*=\s*(?:\"([^\"]*)\"|'([^']*)')",
+        opening_tag,
+        re.IGNORECASE,
+    )
+    if not style_m:
+        return []
+    style_str = style_m.group(1) or style_m.group(2) or ""
+
+    for raw_decl in style_str.split(";"):
+        decl = raw_decl.strip()
+        if not decl or ":" not in decl:
+            continue
+        prop, _, value = decl.partition(":")
+        prop = prop.strip().lower()
+        value = value.strip()
+        if prop not in ("background", "background-color"):
+            continue
+        # Theme token — fine, follows the theme.
+        if "{{theme." in value:
+            continue
+        # Image-like backgrounds (gradient, url) are design decisions
+        # independent of bg_color — allow them.
+        lowered = value.lower()
+        if "gradient" in lowered or "url(" in lowered:
+            continue
+        # Literal hex (e.g. #FFFFFF, #F8F9FA, #fff) on the root = masks
+        # theme. Named colors (white/black/etc) rare enough to skip —
+        # the LLM overwhelmingly uses hex.
+        if re.search(r"#[0-9a-fA-F]{3,8}\b", value):
+            return [
+                f"Root wrapper div has literal `{prop}: {value}`. The "
+                f"slide background is controlled by the .ppt-slide "
+                f"container (theme.bg_color); a literal hex on the root "
+                f"masks it and breaks theme edits. Either remove the "
+                f"declaration, or use `{{{{theme.bg_color}}}}`. Inner "
+                f"cards/panels may use literals freely."
+            ]
+    return []
+
+
 def _validate_free_form_html(html: Any) -> Optional[str]:
     """Return error string if `html` fails free_form sanitization, else None."""
     if not isinstance(html, str):
@@ -219,24 +288,36 @@ def _validate_free_form_html(html: Any) -> Optional[str]:
     for m in _ICON_TAG_RE.finditer(html):
         icon_spans.append((m.start(), m.end()))
 
-    css_errors: List[str] = []
+    lint_errors: List[str] = []
     for m in _STYLE_BLOCK_RE.finditer(html):
         style_str = m.group(2) if m.group(2) is not None else m.group(3)
         if not style_str:
             continue
         in_icon = _is_position_in_icon_tag(html, m.start(2), icon_spans)
-        css_errors.extend(_lint_css_declarations(style_str, in_icon))
+        lint_errors.extend(_lint_css_declarations(style_str, in_icon))
 
-    css_errors.extend(_lint_tailwind_classes(html))
+    lint_errors.extend(_lint_tailwind_classes(html))
 
-    if css_errors:
+    # Root wrapper background lint: a literal hex on the outermost div
+    # masks the .ppt-slide container's theme.bg_color and breaks theme
+    # propagation. Force the LLM to either omit bg on the root or use
+    # a {{theme.bg_color}} token so theme edits cascade cleanly.
+    lint_errors.extend(_lint_root_div_background(html))
+
+    # Theme-token lint: catches malformed {{theme.*}} placeholders so the
+    # LLM retries instead of storing broken markup that would render as
+    # literal "{{theme...}}" text. Substitution itself happens at render
+    # time (see SlideHTMLRenderer.render_slide).
+    lint_errors.extend(validate_theme_tokens(html))
+
+    if lint_errors:
         # Cap the list to 5 so the error stays readable; the LLM only needs
         # enough to know what to fix.
-        head = css_errors[:5]
-        suffix = "" if len(css_errors) <= 5 else f"\n... and {len(css_errors) - 5} more"
+        head = lint_errors[:5]
+        suffix = "" if len(lint_errors) <= 5 else f"\n... and {len(lint_errors) - 5} more"
         return (
-            f"html contains {len(css_errors)} CSS/Tailwind contract "
-            f"violation(s):\n" + "\n".join(f"  - {e}" for e in head) + suffix
+            f"html contains {len(lint_errors)} CSS/Tailwind/theme-token "
+            f"contract violation(s):\n" + "\n".join(f"  - {e}" for e in head) + suffix
         )
     return None
 
@@ -280,17 +361,16 @@ async def set_slide_background(params: Dict[str, Any], ctx: Dict[str, Any]) -> T
         return ToolResult.failure(f"invalid strategy: {strategy!r}")
 
     # Store as a slot so the free_form template can render accordingly.
+    # We never snapshot theme colors here — the template reads theme fields
+    # at render time so theme edits propagate without re-running the LLM.
     bg_slot: Dict[str, Any] = {"strategy": strategy}
     if strategy == "image_overlay":
         url = params.get("image_url")
         if not isinstance(url, str) or not url.strip():
             return ToolResult.failure("image_overlay strategy requires image_url")
         bg_slot["image_url"] = url.strip()
-    elif strategy == "solid":
-        bg_slot["color"] = theme.get("bg_color", "#FEFEFE")
-    elif strategy == "gradient":
-        # Layout templates will read theme colors; we just flag the strategy.
-        pass
+    # solid / gradient / geometric: the template computes the background
+    # from theme fields (bg_color, primary_color, accent_color) at render.
     slide.slots["background"] = bg_slot
     return ToolResult.success(f"background strategy: {strategy}")
 

@@ -31,7 +31,10 @@ async def run_theme_designer(
         return state.theme
 
     system_prompt = build_theme_designer_prompt(
-        state.topic, state.style_hint
+        state.topic,
+        state.style_hint,
+        canvas_width_px=state.canvas_width_px,
+        canvas_height_px=state.canvas_height_px,
     )
     messages = [
         {"role": "system", "content": system_prompt},

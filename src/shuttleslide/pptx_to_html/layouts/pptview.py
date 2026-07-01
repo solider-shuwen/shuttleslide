@@ -16,15 +16,19 @@ class PPTLayout(BaseLayout):
     Features: left thumbnail sidebar, main slide panel, fullscreen play mode.
     """
 
-    def __init__(self, use_base64: bool = False, output_dir: str = None):
+    def __init__(self, use_base64: bool = False, output_dir: str = None,
+                 measurer=None):
         """
         Initialize the PPT layout with converters and templates.
 
         Args:
             use_base64: Whether to embed images as base64 (True) or save as separate files (False, default).
             output_dir: Directory for saving image assets relative to the output HTML.
+            measurer: Optional PlaywrightTextMeasurer (already started);
+                enables shrink-on-overflow for text shapes.  See BaseLayout
+                for lifecycle ownership.
         """
-        super().__init__(use_base64=use_base64, output_dir=output_dir)
+        super().__init__(use_base64=use_base64, output_dir=output_dir, measurer=measurer)
 
     def convert(self, slides: List[ParsedSlide]) -> str:
         """
@@ -157,7 +161,7 @@ class PPTLayout(BaseLayout):
             f"left: {element.left}px",
             f"top: {element.top}px",
             f"width: {element.width}px",
-            f"height: {element.height}px",
+            self._height_style_for_element(element, f"{element.height}px"),
             f"z-index: {element.z_order}",
         ]
 
@@ -278,7 +282,7 @@ class PPTLayout(BaseLayout):
                 f"left: {child.left}px",
                 f"top: {child.top}px",
                 f"width: {child.width}px",
-                f"height: {child.height}px",
+                self._height_style_for_element(child, f"{child.height}px"),
                 f"z-index: {child.z_order}",
             ]
 

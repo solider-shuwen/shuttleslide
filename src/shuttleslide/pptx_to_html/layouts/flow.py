@@ -21,9 +21,9 @@ class FlowLayout(PPTLayout):
     PPT-style editor interface.
     """
 
-    def __init__(self, output_dir: str = None):
+    def __init__(self, output_dir: str = None, measurer=None):
         """Initialize the flow layout with converters."""
-        super().__init__(use_base64=False, output_dir=output_dir)
+        super().__init__(use_base64=False, output_dir=output_dir, measurer=measurer)
 
     def convert(self, slides: List[ParsedSlide]) -> str:
         """
@@ -43,6 +43,7 @@ class FlowLayout(PPTLayout):
             "    <meta name='viewport' content='width=device-width, initial-scale=1.0'>",
             "    <title>Presentation</title>",
             self._get_flow_styles(),
+            self._get_flow_script(),
             "</head>",
             "<body>",
             "    <div class='presentation'>",
@@ -61,7 +62,12 @@ class FlowLayout(PPTLayout):
         return "\n".join(html_parts)
 
     def _convert_flow_slide(self, slide: ParsedSlide) -> str:
-        """Convert a single slide to a section with absolute positioning."""
+        """Convert a single slide to a section with absolute positioning.
+
+        The <section> is wrapped in a <div class='slide-frame'>. The frame
+        occupies the post-scale box (set by JS) so that transform: scale()
+        on the inner section doesn't leave a 1889px-tall empty box behind.
+        """
         section_styles = [
             f"width: {slide.width}px",
             f"height: {slide.height}px",
@@ -75,6 +81,7 @@ class FlowLayout(PPTLayout):
         section_style_str = "; ".join(section_styles)
 
         html_parts = [
+            f"<div class='slide-frame' data-pptx-slide-number='{slide.slide_number}'>",
             f"<section class='slide'",
             f"    data-pptx-slide-number='{slide.slide_number}'",
             f"    data-pptx-layout='{slide.layout_name}'",
@@ -86,11 +93,23 @@ class FlowLayout(PPTLayout):
         if elements_html:
             html_parts.append(f"    {elements_html}")
 
-        html_parts.append("</section>")
+        html_parts.extend([
+            "</section>",
+            "</div>",
+        ])
         return "\n".join(html_parts)
 
     def _get_flow_styles(self) -> str:
-        """Get CSS styles for flow layout."""
+        """Get CSS styles for flow layout.
+
+        Why the .slide-frame / .slide split:
+        transform: scale() doesn't shrink the element's layout box, so a
+        1512x1889 poster scaled down to 0.3 would still reserve 1889px of
+        vertical space, leaving a huge empty band beneath each slide. The
+        .slide-frame wrapper occupies the post-scale box (width/height set
+        dynamically by JS), and the inner .slide is absolutely positioned
+        so its scaled visual fits exactly inside the frame.
+        """
         return """    <style>
         * {
             margin: 0;
@@ -114,12 +133,20 @@ class FlowLayout(PPTLayout):
             max-width: 100%;
         }
 
-        .slide {
+        .slide-frame {
             position: relative;
-            background-color: white;
             margin: 20px auto;
-            overflow: hidden;
+            background-color: white;
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        }
+
+        .slide {
+            position: absolute;
+            top: 0;
+            left: 0;
+            overflow: hidden;
+            transform-origin: top left;
+            transform: scale(var(--scale, 1));
         }
 
         /* Slide elements */
@@ -158,28 +185,6 @@ class FlowLayout(PPTLayout):
             padding: 0;
         }
 
-        /* Responsive scaling */
-        @media (max-width: 1200px) {
-            .slide {
-                transform: scale(0.8);
-                transform-origin: top center;
-            }
-        }
-
-        @media (max-width: 800px) {
-            .slide {
-                transform: scale(0.6);
-                transform-origin: top center;
-            }
-        }
-
-        @media (max-width: 600px) {
-            .slide {
-                transform: scale(0.4);
-                transform-origin: top center;
-            }
-        }
-
         /* Print styles */
         @media print {
             body {
@@ -191,11 +196,64 @@ class FlowLayout(PPTLayout):
                 max-width: 100%;
             }
 
-            .slide {
+            .slide-frame {
                 margin: 0;
                 page-break-after: always;
                 box-shadow: none;
+            }
+
+            .slide {
                 transform: none !important;
             }
         }
     </style>"""
+
+    def _get_flow_script(self) -> str:
+        """JS that rescales each .slide to fit the viewport.
+
+        Previously this was done with three hard-coded @media breakpoints
+        (1200/800/600px). Those breakpoints ignored the slide's actual
+        pixel size, so a 1512x1889 poster never scaled down even on a
+        1280px window — exactly the "can enlarge, can't shrink" symptom.
+
+        Now each slide's scale is computed from its real width and the
+        current viewport width. The matching .slide-frame gets the scaled
+        width/height so the document flow reclaims the freed space.
+        """
+        return """    <script>
+        (function () {
+            // Horizontal padding reserved around the slide: body padding
+            // (20px each side) + a small margin so the slide isn't flush
+            // against the window edge.
+            var SIDE_GUTTER = 60;
+
+            function fitSlide(slide) {
+                var frame = slide.parentElement;
+                if (!frame || !frame.classList.contains('slide-frame')) return;
+
+                // offsetWidth/Height ignore transform, so these are the
+                // slide's intrinsic pixel dimensions regardless of scale.
+                var sw = slide.offsetWidth;
+                var sh = slide.offsetHeight;
+                if (!sw) return;
+
+                var available = window.innerWidth - SIDE_GUTTER;
+                var scale = Math.min(available / sw, 1);
+                slide.style.setProperty('--scale', scale);
+                frame.style.width = (sw * scale) + 'px';
+                frame.style.height = (sh * scale) + 'px';
+            }
+
+            function fitAll() {
+                document.querySelectorAll('.slide').forEach(fitSlide);
+            }
+
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', fitAll);
+            } else {
+                fitAll();
+            }
+            window.addEventListener('resize', fitAll);
+            window.addEventListener('load', fitAll);
+        })();
+    </script>"""

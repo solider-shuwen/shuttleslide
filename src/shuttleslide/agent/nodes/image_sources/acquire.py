@@ -71,7 +71,7 @@ _URL_RE = re.compile(r"^https?://", re.IGNORECASE)
 
 # Max candidates we'll try before giving up. Each one is a network
 # round-trip + potential VLM call; 3 keeps latency bounded.
-_MAX_CANDIDATES = 3
+_MAX_CANDIDATES = 10
 
 
 async def acquire_web_image(
@@ -208,7 +208,7 @@ async def _try_one_candidate(
         return False
 
     image_bytes = ensure_pptx_compatible(image_bytes)
-    mime, prepared_bytes, ok = _prepare_for_slide(image_bytes)
+    mime, prepared_bytes, ok, pil_w, pil_h = _prepare_for_slide(image_bytes)
     if not ok:
         state.add_warning(
             f"image_acquirer slide {slide_idx + 1} slot {slot_id!r}: "
@@ -260,6 +260,8 @@ async def _try_one_candidate(
         "path": rel_path,
         "description": spec.get("description", ""),
         "image_type": spec.get("image_type", "illustration"),
+        "width": pil_w,
+        "height": pil_h,
         "mime": mime,
         "meta": {
             "source_type": "web",
@@ -273,13 +275,20 @@ async def _try_one_candidate(
     return True
 
 
-def _prepare_for_slide(image_bytes: bytes) -> Tuple[str, bytes, bool]:
+def _prepare_for_slide(image_bytes: bytes) -> Tuple[str, bytes, bool, int, int]:
     """Downscale + JPEG-encode an image for slide display.
 
-    Returns (mime, jpeg_bytes, ok). ok=False when the bytes can't be
-    decoded as an image, or when the decoded image is already smaller
-    than ``_MIN_DIMENSION`` (we don't upscale — tiny inputs are rejected
-    rather than shipped as pixelated blobs).
+    Returns ``(mime, jpeg_bytes, ok, width, height)``. ``ok=False`` when
+    the bytes can't be decoded as an image, or when the decoded image is
+    already smaller than ``_MIN_DIMENSION`` (we don't upscale — tiny
+    inputs are rejected rather than shipped as pixelated blobs). On
+    ``ok=False`` the dimension fields are ``(0, 0)``.
+
+    The dimensions reflect the post-resize image (what actually ships to
+    the slide HTML); the original larger source's dimensions are
+    intentionally not surfaced. ``(0, 0)`` is also returned on the
+    Pillow-missing fallback path — callers that need real dimensions
+    should require Pillow rather than degrade silently.
 
     Unlike the previous ``_encode_for_slide`` (which targeted a ~3KB
     base64 budget), this targets a display-size budget: the longest edge
@@ -288,7 +297,7 @@ def _prepare_for_slide(image_bytes: bytes) -> Tuple[str, bytes, bool]:
     12000-char cap thanks to the file-externalized persistence model.
     """
     if not image_bytes:
-        return "", b"", False
+        return "", b"", False, 0, 0
 
     try:
         from PIL import Image
@@ -296,13 +305,13 @@ def _prepare_for_slide(image_bytes: bytes) -> Tuple[str, bytes, bool]:
         # No Pillow — pass through the bytes as-is. ensure_pptx_compatible
         # already normalized the format to something PPTX can handle.
         mime = _guess_mime_from_bytes(image_bytes)
-        return mime, image_bytes, True
+        return mime, image_bytes, True, 0, 0
 
     try:
         img = Image.open(io.BytesIO(image_bytes))
     except Exception as exc:
         logger.warning("PIL could not open image: %s", exc)
-        return "", b"", False
+        return "", b"", False, 0, 0
 
     # Flatten transparency onto white — JPEG has no alpha channel and
     # transparent PNGs saved as JPEG without a matte turn solid black.
@@ -316,16 +325,17 @@ def _prepare_for_slide(image_bytes: bytes) -> Tuple[str, bytes, bool]:
     # Reject images that are already too small. We don't upscale.
     w, h = img.size
     if w < _MIN_DIMENSION or h < _MIN_DIMENSION:
-        return "", b"", False
+        return "", b"", False, 0, 0
 
     # Cap the longest edge at _MAX_DISPLAY_DIMENSION. Preserve aspect.
     if max(w, h) > _MAX_DISPLAY_DIMENSION:
         scale = _MAX_DISPLAY_DIMENSION / max(w, h)
         img = img.resize((max(1, int(w * scale)), max(1, int(h * scale))))
 
+    final_w, final_h = img.size
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=_JPEG_QUALITY)
-    return "image/jpeg", buf.getvalue(), True
+    return "image/jpeg", buf.getvalue(), True, final_w, final_h
 
 
 def _persist_image_bytes(

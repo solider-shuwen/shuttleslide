@@ -19,6 +19,11 @@ from typing import Any, Dict, List, Optional
 
 import jinja2
 
+from shuttleslide.agent.theme_tokens import (
+    _darken,
+    _hex_to_rgba,
+    substitute_theme_tokens,
+)
 from shuttleslide.html_to_pptx.schema import (
     PresentationDSL,
     SlideDSL,
@@ -38,23 +43,12 @@ _HEADING_RE = re.compile(r"<h[12][^>]*>(.*?)</h[12]>", re.IGNORECASE | re.DOTALL
 
 
 # ---------------------------------------------------------------------------
-# Theme color helpers — exposed to Jinja templates as env globals.
+# Theme color helpers — _hex_to_rgba and _darken live in theme_tokens.py
+# (shared with the {{theme.*}} placeholder substitution path). The wrappers
+# below are presentation-specific (they map "primary"/"accent"/"warn"
+# keywords to theme fields) and stay here, registered as Jinja globals so
+# the free_form template can call them directly.
 # ---------------------------------------------------------------------------
-
-def _hex_to_rgba(hex_color: str, alpha: float) -> str:
-    """Convert a hex color (with or without leading #) to "r, g, b, alpha"."""
-    h = hex_color.lstrip("#")
-    if len(h) == 3:
-        h = "".join(c * 2 for c in h)
-    if len(h) != 6:
-        return f"0, 0, 0, {alpha}"
-    try:
-        r = int(h[0:2], 16)
-        g = int(h[2:4], 16)
-        b = int(h[4:6], 16)
-        return f"{r}, {g}, {b}, {alpha}"
-    except ValueError:
-        return f"0, 0, 0, {alpha}"
 
 
 def _theme_color(theme: Any, accent: str) -> str:
@@ -83,29 +77,6 @@ def _theme_color(theme: Any, accent: str) -> str:
 def _accent_rgba(theme: Any, accent: str, alpha: float) -> str:
     """Return rgba(...) string for a theme accent at a given alpha."""
     return f"rgba({_hex_to_rgba(_theme_color(theme, accent), alpha)})"
-
-
-def _darken(hex_color: str, factor: float = 0.85) -> str:
-    """Darken a hex color by multiplying RGB channels by `factor`.
-
-    Used for gradient endpoints (e.g. title_bar gradient from primary_color
-    to a slightly darker shade of itself). Returns #RRGGBB.
-    """
-    h = hex_color.lstrip("#")
-    if len(h) == 3:
-        h = "".join(c * 2 for c in h)
-    if len(h) != 6:
-        return hex_color
-    try:
-        r = int(h[0:2], 16)
-        g = int(h[2:4], 16)
-        b = int(h[4:6], 16)
-        r = max(0, min(255, int(r * factor)))
-        g = max(0, min(255, int(g * factor)))
-        b = max(0, min(255, int(b * factor)))
-        return f"#{r:02x}{g:02x}{b:02x}"
-    except ValueError:
-        return hex_color
 
 
 # Cross-platform system font stack. Used as the default body/title font
@@ -207,8 +178,17 @@ class SlideHTMLRenderer:
     ) -> str:
         """Render a single slide as a standalone HTML document."""
         layout_name = slide.layout if slide.layout in VALID_LAYOUTS else _DEFAULT_LAYOUT
+        # Substitute {{theme.*}} placeholders in the authored HTML before
+        # rendering. The slot stores the placeholder version (so the same
+        # slide re-renders cleanly when theme changes); only the rendered
+        # output carries the live values. Legacy HTML written before the
+        # token system has no placeholders and passes through unchanged.
+        slots = dict(slide.slots)
+        raw_html = slots.get("html")
+        if isinstance(raw_html, str):
+            slots["html"] = substitute_theme_tokens(raw_html, theme)
         slide_html = self.env.get_template(f"layouts/{layout_name}.html.j2").render(
-            slots=slide.slots,
+            slots=slots,
             theme=theme,
         )
         # CDN assets — downloaded once and cached at ~/.shuttleslide/cdn/.

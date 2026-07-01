@@ -25,17 +25,25 @@ class BaseLayout:
     Subclasses override element conversion methods for layout-specific positioning.
     """
 
-    def __init__(self, use_base64: bool = False, output_dir: Optional[str] = None):
+    def __init__(self, use_base64: bool = False, output_dir: Optional[str] = None,
+                 measurer=None):
         """
         Initialize the base layout with converters.
 
         Args:
             use_base64: Whether to embed images as base64 (True) or save as separate files (False, default).
             output_dir: Directory for saving image assets. If None, uses default.
+            measurer: Optional PlaywrightTextMeasurer instance (already started).
+                When provided, enables HTML-mode shrink-on-overflow: text
+                shapes that would exceed the PPT-declared shape height are
+                font-scaled to fit (mirrors PPT's <a:normAutofit fontScale>).
+                Caller owns the measurer's lifecycle (start()/close()).
         """
         self.use_base64 = use_base64
         self.output_dir = output_dir
-        self.text_converter = TextConverter(use_base64=use_base64, output_dir=output_dir)
+        self.text_converter = TextConverter(
+            use_base64=use_base64, output_dir=output_dir, measurer=measurer,
+        )
         self.table_converter = TableConverter()
         self.image_converter = ImageConverter(use_base64=use_base64, output_dir=output_dir)
         self.shape_converter = ShapeConverter(use_base64=use_base64, output_dir=output_dir)
@@ -190,9 +198,12 @@ class BaseLayout:
         # White-space preservation for text
         styles.append("white-space: pre-wrap")
 
-        # Conditional overflow for multi-paragraph text
+        # Conditional overflow for multi-paragraph text.
+        # spAutoFit elements must not be clipped — PPT semantics are "shape
+        # grows to fit text", so clipping would crop content the user can
+        # see in PPT.
         paragraphs = getattr(element, 'paragraphs', None)
-        if not paragraphs or len(paragraphs) <= 1:
+        if (not paragraphs or len(paragraphs) <= 1) and BaseLayout._should_clip_element(element):
             styles.append("overflow: hidden")
 
         # Vertical alignment using CSS flexbox (column direction for stacked paragraphs)
@@ -272,3 +283,36 @@ class BaseLayout:
         style_str = "; ".join(styles)
         class_attr = f' class="{css_class}"' if css_class else ""
         return f'<div{class_attr} style="{style_str}">{text_html}</div>'
+
+    @staticmethod
+    def _height_style_for_element(element: SlideElement, height_value: str) -> str:
+        """Pick 'height' vs 'min-height' based on the element's autofit mode.
+
+        PPT text frames declare their fit behavior via one of three mutually
+        exclusive <a:bodyPr> children:
+
+          - spAutoFit   — the shape grows to fit the text. PPT stores a
+                          snapshot height but treats it as a soft floor; the
+                          text always renders fully. We mirror that by emitting
+                          min-height so the box can expand past the snapshot
+                          when CSS line-metrics need more room.
+          - normAutofit — the text is shrunk (fontScale) to fit the box.
+                          Treat PPT height as a hard constraint.
+          - noAutofit   — text overflows / is clipped. Hard constraint.
+
+        We also drop overflow:hidden for spAutoFit elements so the expanded
+        box doesn't clip its own text. Callers that include overflow in their
+        own style list should respect _should_clip_element() instead.
+        """
+        if element.metadata.get("autofit") == "spAutoFit":
+            return f"min-height: {height_value}"
+        return f"height: {height_value}"
+
+    @staticmethod
+    def _should_clip_element(element: SlideElement) -> bool:
+        """True when the layout may emit overflow:hidden for this element.
+
+        spAutoFit elements must not be clipped — that would defeat the
+        'shape grows with text' semantics.
+        """
+        return element.metadata.get("autofit") != "spAutoFit"

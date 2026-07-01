@@ -12,7 +12,10 @@ from typing import TYPE_CHECKING, Callable, Optional
 
 from shuttleslide.agent.llm import LLMClient
 from shuttleslide.agent.llm.tool_call import LLMResponseEvent
-from shuttleslide.agent.prompts import build_slide_builder_prompt
+from shuttleslide.agent.prompts import (
+    build_slide_builder_incremental_prompt,
+    build_slide_builder_prompt,
+)
 from shuttleslide.agent.state import AgentState
 from shuttleslide.agent.tools.registry import ToolRegistry
 from shuttleslide.html_to_pptx.schema import SlideDSL
@@ -60,6 +63,8 @@ async def run_slide_builder(
         slide_index=slide_index + 1,
         total_count=total,
         slide_images=slide_images,
+        canvas_width_px=state.canvas_width_px,
+        canvas_height_px=state.canvas_height_px,
     )
     state.current_slide_messages = [
         {"role": "system", "content": system_prompt},
@@ -171,6 +176,163 @@ async def run_slide_builder(
         # CSS lint failures, HTML > 12000 chars, or a regression like the
         # svg_file/image_file payload recognition bug. Without this dump
         # the failure is invisible — only a warning string reaches stdout.
+        _dump_failure_artifacts(
+            output_dir=output_dir,
+            slide_index=slide_index,
+            html=slide.slots.get("html"),
+            messages=state.current_slide_messages,
+        )
+
+    return slide
+
+
+async def run_slide_builder_incremental(
+    state: AgentState,
+    llm: LLMClient,
+    tools: ToolRegistry,
+    slide_index: int,
+    *,
+    current_html: str,
+    old_outline: Optional[dict] = None,
+    theme_before: Optional[dict] = None,
+    theme_after: Optional[dict] = None,
+    temperature: float = 0.4,
+    max_tokens: Optional[int] = 4096,
+    max_iterations: int = 6,
+    on_llm_response: Optional[Callable[[LLMResponseEvent], None]] = None,
+    output_dir: Optional[Path] = None,
+) -> SlideDSL:
+    """Incrementally regenerate a single slide, preserving user edits.
+
+    Mirrors :func:`run_slide_builder`'s tool-call loop but swaps in the
+    incremental prompt (:func:`build_slide_builder_incremental_prompt`)
+    which shows the LLM the current HTML + before/after upstream diff
+    and asks for a minimal patch rather than a from-scratch rewrite.
+
+    The existing slide at ``state.slides[slide_index]`` is replaced in
+    place (same array slot). Callers are expected to have snapshotted
+    the pre-regenerate value for undo purposes.
+
+    ``temperature`` defaults lower than the fresh path (0.4 vs 0.6) —
+    less randomness = less drift from the user's manual edits. Still
+    non-zero so the LLM doesn't get stuck on a single bad phrasing.
+
+    Returns the regenerated slide. Warnings are surfaced via
+    :meth:`AgentState.add_warning` on the same conditions as the fresh
+    path (max_iterations hit, LLM stops without ``finish_slide``).
+    """
+    if slide_index >= len(state.outline):
+        raise IndexError(f"slide_index {slide_index} out of range for outline")
+
+    new_outline = state.outline[slide_index]
+    total = len(state.outline)
+    slide_images = state.slide_images.get(slide_index, {})
+    image_types = {
+        img["slot_id"]: img.get("image_type", "illustration")
+        for img in new_outline.get("images", [])
+        if isinstance(img, dict) and "slot_id" in img
+    }
+
+    system_prompt = build_slide_builder_incremental_prompt(
+        current_html=current_html,
+        new_outline=new_outline,
+        old_outline=old_outline,
+        theme_before=theme_before,
+        theme_after=theme_after or dict(state.theme),
+        slide_index=slide_index + 1,
+        total_count=total,
+        slide_images=slide_images,
+        canvas_width_px=state.canvas_width_px,
+        canvas_height_px=state.canvas_height_px,
+    )
+    state.current_slide_messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": (
+            "Update the slide HTML above to reflect the upstream change. "
+            "Preserve user edits and structural choices. Call "
+            "`set_free_form_html` with the updated HTML, then `finish_slide`."
+        )},
+    ]
+
+    # Replace the slide in place — keep slot untouched so the renderer's
+    # final pass on the (eventually updated) HTML is consistent. The
+    # slide-builder loop's set_free_form_html tool writes into slots.
+    slide = SlideDSL(layout="free_form")
+    while len(state.slides) <= slide_index:
+        state.slides.append(None)  # type: ignore[arg-type]
+    state.slides[slide_index] = slide
+
+    tool_schemas = tools.openai_schema_for("slide_builder")
+
+    for iteration in range(max_iterations):
+        response = await llm.chat_with_tools(
+            messages=state.current_slide_messages,
+            tools=tool_schemas,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        state.current_slide_messages.append(response.assistant_message)
+
+        if on_llm_response is not None:
+            on_llm_response(
+                LLMResponseEvent(
+                    stage="slide_builder_incremental",
+                    iteration=iteration + 1,
+                    max_iterations=max_iterations,
+                    slide_index=slide_index + 1,
+                    slide_total=total,
+                    content=response.content,
+                    reasoning=response.reasoning,
+                    tool_calls=response.tool_calls,
+                    usage=response.usage,
+                )
+            )
+
+        if not response.has_tool_calls:
+            state.add_warning(
+                f"slide {slide_index + 1} (incremental): LLM stopped after "
+                f"{iteration + 1} iterations without calling finish_slide"
+            )
+            break
+
+        finish_called = False
+        for call in response.tool_calls:
+            result = await tools.dispatch(
+                call,
+                slide=slide,
+                theme=state.theme,
+                slide_images=slide_images,
+                image_types=image_types,
+                last_assistant_reasoning=response.reasoning or "",
+            )
+            state.current_slide_messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call.id,
+                    "content": result.summary,
+                }
+            )
+            if call.name == "finish_slide" and result.ok:
+                finish_called = True
+            if not result.ok:
+                preview = result.summary if len(result.summary) <= 400 else (
+                    result.summary[:397] + "..."
+                )
+                print(
+                    f"  [slide {slide_index + 1} incr iter {iteration + 1}] "
+                    f"tool {call.name} FAILED: {preview}",
+                    flush=True,
+                )
+
+        if finish_called:
+            break
+    else:
+        has_html = "html" in slide.slots
+        state.add_warning(
+            f"slide {slide_index + 1} (incremental): reached "
+            f"max_iterations={max_iterations} without finish_slide; "
+            f"{'HTML was set' if has_html else 'no HTML produced'}"
+        )
         _dump_failure_artifacts(
             output_dir=output_dir,
             slide_index=slide_index,

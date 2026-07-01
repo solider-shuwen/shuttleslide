@@ -1,3 +1,17 @@
+/* ============ Canvas dimensions (set by JS from /api/state) ============ */
+/* Defaults reproduce the historical 16:9 slide (1280x720). When the
+   active run uses a different aspect ratio (e.g. 9:16 portrait), app.js
+   learns the real dims via /api/state and overwrites these on the
+   documentElement. The numeric-unitless variants feed calc()-based
+   scale math (transform: scale, height computations) where CSS calc
+   can't divide a length by a length. */
+:root {
+  --canvas-w: 1280px;
+  --canvas-h: 720px;
+  --canvas-w-num: 1280;
+  --canvas-h-num: 720;
+}
+
 /* ============ Design tokens (Apple-inspired, dual-mode) ============ */
 /* Light values match Apple's HIG light system colors; dark values
    match macOS system dark colors. Toggling <html data-theme> flips
@@ -216,6 +230,77 @@ body {
 [data-theme="dark"] #theme-toggle .icon-sun { display: none; }
 [data-theme="dark"] #theme-toggle .icon-moon { display: block; }
 
+/* ============ Edit-in-progress bar + global lock ============ */
+/* Shown while an LLM edit is running. body.edit-in-progress also dims every
+   mutating affordance (edit buttons, chat send/undo/delete, upload input)
+   via pointer-events:none + opacity, so the user can't kick off a second
+   concurrent edit. Read in app.js setEditInProgress / clearEditInProgress. */
+.edit-progress-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--bg-overlay);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 13px;
+  color: var(--text-muted, var(--text));
+}
+.edit-progress-bar.hidden { display: none; }
+
+.edit-progress-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--border, rgba(0,0,0,0.15));
+  border-top-color: var(--accent, #3b82f6);
+  animation: edit-spin 0.9s linear infinite;
+}
+@keyframes edit-spin { to { transform: rotate(360deg); } }
+#edit-progress-label { flex: 1; }
+#edit-cancel-btn {
+  padding: 4px 12px;
+  font-size: 12px;
+  background: transparent;
+  border: 1px solid var(--border, rgba(0,0,0,0.2));
+  border-radius: 6px;
+  color: var(--text-muted, inherit);
+  cursor: pointer;
+}
+#edit-cancel-btn:hover:not(:disabled) {
+  background: var(--accent-soft, rgba(59,130,246,0.1));
+  border-color: var(--accent, #3b82f6);
+  color: var(--text);
+}
+#edit-cancel-btn:disabled { opacity: 0.5; cursor: default; }
+
+/* Global mutation lock — disable every editing affordance while a
+   background edit is running. Targets are scoped tightly (chat panel
+   controls + element edit buttons + drag-drop zones) so the user can
+   still scroll thumbnails, switch tabs, and read the chat history. */
+body.edit-in-progress .chat-send-btn,
+body.edit-in-progress .chat-undo-btn,
+body.edit-in-progress .chat-delete-btn,
+body.edit-in-progress .chat-file-input,
+body.edit-in-progress .edit-btn,
+body.edit-in-progress [data-edit-action],
+body.edit-in-progress #approve-btn,
+body.edit-in-progress .history-revert-btn,
+body.edit-in-progress .history-delete-btn,
+body.edit-in-progress .regenerate-btn,
+body.edit-in-progress .dismiss-stale-btn,
+body.edit-in-progress .thumb-dropzone {
+  pointer-events: none;
+  opacity: 0.4;
+}
+
+/* Cancelled chat entry — greyed-out assistant marker appended after a
+   user-initiated cancellation so the chat log shows what was attempted. */
+.chat-entry.cancelled {
+  opacity: 0.55;
+  font-style: italic;
+}
+
 /* ============ Top stage bar (replaces PPT menu bar) ============ */
 #stage-bar {
   flex-shrink: 0;
@@ -386,6 +471,11 @@ main {
   flex-direction: column;
   gap: 8px;
 }
+/* HTML hidden 属性必须显式压过 display:flex — 否则两个面板会同时显示 */
+#thumb-list[hidden],
+#history-list[hidden] {
+  display: none !important;
+}
 .thumb {
   padding: 10px;
   background: var(--bg-canvas);
@@ -419,10 +509,13 @@ main {
   color: var(--text-primary);
   line-height: 1.4;
 }
-/* Slide thumbnail: 160x90 (16:9) iframe scaled from 1280x720 */
+/* Slide thumbnail: scaled-down iframe of the slide canvas. Outer box
+   takes the canvas aspect-ratio (driven by --canvas-w/h CSS vars set
+   from /api/state); inner iframe is fixed at the canvas's native px
+   size and scaled to fit the thumb width. */
 .thumb-slide {
   width: 100%;
-  aspect-ratio: 16/9;
+  aspect-ratio: var(--canvas-w-num) / var(--canvas-h-num);
   overflow: hidden;
   position: relative;
   border-radius: var(--radius-xs);
@@ -430,9 +523,16 @@ main {
   border: 1px solid var(--border-subtle);
 }
 .thumb-slide iframe {
-  width: 1280px;
-  height: 720px;
-  transform: scale(0.125);   /* 160 / 1280 = 0.125 (matches thumb inner width) */
+  width: var(--canvas-w);
+  height: var(--canvas-h);
+  /* Scale = thumb-width / canvas-width. Assumes the thumb container
+     renders at ~160px wide (matches the historical layout). CSS calc
+     can't divide a length by a length, so we use the unitless
+     --canvas-w-num and the literal thumb width. For non-default
+     aspect ratios this still adapts (e.g. 720px-wide portrait canvas
+     → scale 160/720 ≈ 0.222), so the thumbnail's vertical extent
+     matches the canvas's true shape. */
+  transform: scale(calc(160 / var(--canvas-w-num)));
   transform-origin: top left;
   border: 0;
   pointer-events: none;
@@ -440,7 +540,7 @@ main {
 }
 .thumb-image {
   width: 100%;
-  aspect-ratio: 16/9;
+  aspect-ratio: var(--canvas-w-num) / var(--canvas-h-num);
   object-fit: contain;
   background: var(--bg-canvas);
   border-radius: var(--radius-xs);
@@ -448,7 +548,7 @@ main {
 }
 .thumb-svg {
   width: 100%;
-  aspect-ratio: 16/9;
+  aspect-ratio: var(--canvas-w-num) / var(--canvas-h-num);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -466,6 +566,7 @@ main {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  position: relative; /* anchor for #layers-panel absolute overlay */
 }
 #status-banner {
   padding: 8px 12px;
@@ -633,14 +734,14 @@ main {
   letter-spacing: 0.08em;
   font-weight: 600;
 }
-/* Big-slide wrapper: outer div takes the responsive 16:9 box, inner
-   iframe is fixed at 1280x720 (the slide's native canvas) and scaled
-   via JS to fit. Mirrors .thumb-slide's approach — without this, the
-   iframe viewport (e.g. 800x450) is smaller than the .ppt-slide inside
-   (1280x720), producing scrollbars / clipped content. */
+/* Big-slide wrapper: outer div takes the responsive canvas-aspect-ratio
+   box, inner iframe is fixed at the canvas's native px size (read from
+   --canvas-w/h CSS vars) and scaled via JS to fit. Mirrors .thumb-slide's
+   approach — without this, the iframe viewport would be smaller than the
+   .ppt-slide inside and content would clip / scroll. */
 #preview-content .big-slide-wrapper {
   width: 100%;
-  aspect-ratio: 16/9;
+  aspect-ratio: var(--canvas-w-num) / var(--canvas-h-num);
   overflow: hidden;
   position: relative;
   border: 1px solid var(--border-default);
@@ -648,31 +749,142 @@ main {
   background: white;
 }
 #preview-content .big-slide-wrapper iframe {
-  width: 1280px;
-  height: 720px;
+  width: var(--canvas-w);
+  height: var(--canvas-h);
   transform-origin: top left;
   border: 0;
   margin: 0;
   display: block;
 }
+#preview-fullscreen-btn,
+#preview-layers-btn {
+  margin-left: 8px;
+  padding: 2px 6px;
+  font-size: 11px;
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-tertiary);
+  vertical-align: middle;
+  cursor: pointer;
+  border-radius: 3px;
+}
+#preview-fullscreen-btn:hover,
+#preview-layers-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+/* Layers button stays visually "pressed" while its panel is open. */
+#preview-layers-btn[aria-pressed="true"] {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+/* Fullscreen mode: position:fixed overlays entire viewport, covering sidebars.
+   #preview keeps flex column so h3 + progress + content stack vertically;
+   explicit width:100% on #preview-content overrides the default flex
+   shrink-to-fit so the slide wrapper actually fills the viewport. */
+#preview.fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: var(--bg-canvas);
+}
+#preview.fullscreen #preview-content {
+  width: 100%;
+  max-width: 1600px;
+  margin: 0 auto;
+  flex: 1;
+  overflow: auto;
+}
 #done-banner {
   margin: 0 16px 16px;
-  padding: 14px 16px;
+  padding: 0;
   background: var(--success-soft);
   border: 1px solid color-mix(in srgb, var(--success) 30%, transparent);
   border-radius: var(--radius-sm);
   color: var(--success);
+  overflow: hidden;
 }
+#done-banner[hidden] { display: none; }
+
+#done-banner-header {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 var(--space-3);
+}
+#done-banner.expanded #done-banner-header {
+  border-bottom: 1px solid color-mix(in srgb, var(--success) 20%, transparent);
+}
+
+#done-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--success);
+  font: 600 13px/1 var(--font-sans);
+  cursor: pointer;
+}
+#done-toggle:hover { color: color-mix(in srgb, var(--success) 80%, var(--text-primary) 20%); }
+#done-toggle .done-caret {
+  display: inline-block;
+  width: 10px;
+  text-align: center;
+  transition: transform var(--dur-fast) var(--ease-standard);
+}
+#done-banner.expanded #done-toggle .done-caret { transform: rotate(90deg); }
+#done-toggle .done-file-count {
+  display: inline-block;
+  min-width: 18px;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--success) 20%, transparent);
+  color: var(--success);
+  font-size: 10px;
+  font-weight: 600;
+  text-align: center;
+  letter-spacing: 0;
+}
+#done-toggle .done-file-count:empty { display: none; }
+
+#done-banner-body {
+  padding: 12px var(--space-3) 14px;
+}
+#done-banner.collapsed #done-banner-body { display: none; }
 #done-banner ul { margin: 8px 0 0 0; padding-left: 20px; }
 
 /* ============ Right: chat column (PR3 placeholder, unchanged) ============ */
 #chat {
-  width: 320px;
+  width: 360px;
   flex-shrink: 0;
   background: var(--bg-elevated);
   border-left: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
+  /* Chat needs its own scroll context — the history grows, the input
+     area stays pinned at the bottom of the column. */
+  min-height: 0;
+}
+#chat h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.chat-target-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--accent-soft, rgba(19, 62, 255, 0.1));
+  color: var(--accent, #133EFF);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
 }
 #chat .placeholder {
   color: var(--text-tertiary);
@@ -681,6 +893,229 @@ main {
   text-align: center;
   font-size: 13px;
   line-height: 1.6;
+}
+
+/* Chat history — scrollable message list. */
+.chat-history {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.chat-msg {
+  font-size: 13px;
+  line-height: 1.5;
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+.chat-msg-role {
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+.chat-msg-body {
+  flex: 1;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.chat-msg-user {
+  background: var(--bg-sunken, rgba(0, 0, 0, 0.03));
+}
+.chat-msg-assistant {
+  background: var(--accent-soft, rgba(19, 62, 255, 0.06));
+}
+.chat-msg-applied {
+  background: rgba(0, 205, 130, 0.08);
+  border-left: 2px solid #00cd82;
+}
+.chat-msg-rejected {
+  background: rgba(255, 87, 34, 0.08);
+  border-left: 2px solid #ff5722;
+}
+.chat-msg-pending {
+  background: rgba(0, 0, 0, 0.03);
+  color: var(--text-muted, inherit);
+  font-style: italic;
+}
+.chat-msg-pending-spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--border, rgba(0, 0, 0, 0.15));
+  border-top-color: var(--accent, #3b82f6);
+  animation: chat-pending-spin 0.9s linear infinite;
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+.chat-msg-pending-body {
+  font-size: 12px;
+  opacity: 0.8;
+}
+@keyframes chat-pending-spin { to { transform: rotate(360deg); } }
+.chat-msg-out_of_scope {
+  background: rgba(255, 193, 7, 0.10);
+  border-left: 2px solid #ffc107;
+  /* Wrap body + button on small widths; the button stays right-aligned
+     when there's room and drops to the next line when there isn't. */
+  flex-wrap: wrap;
+}
+.chat-msg-marker-warn { color: #ffc107; }
+.chat-msg-goto {
+  margin-top: 4px;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent, #133eff);
+  background: var(--accent-soft, rgba(19, 62, 255, 0.08));
+  border: 1px solid var(--accent, #133eff);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.chat-msg-goto:hover {
+  background: var(--accent, #133eff);
+  color: #fff;
+}
+.chat-msg-marker {
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.chat-msg-marker-fail { color: #ff5722; }
+.chat-msg-applied .chat-msg-marker { color: #00cd82; }
+.chat-diff {
+  margin-top: 4px;
+  font-size: 11px;
+}
+.chat-diff summary {
+  cursor: pointer;
+  color: var(--text-tertiary);
+}
+.chat-diff pre {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  background: var(--bg-sunken, rgba(0, 0, 0, 0.04));
+  border-radius: 4px;
+  font-size: 10px;
+  line-height: 1.4;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Chat controls — mode toggle, input, action buttons. */
+#chat-controls {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border-subtle);
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.chat-mode-toggle {
+  display: flex;
+  gap: 4px;
+  background: var(--bg-sunken, rgba(0, 0, 0, 0.04));
+  padding: 2px;
+  border-radius: 6px;
+}
+.chat-mode {
+  flex: 1;
+  padding: 4px 8px;
+  font-size: 11px;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.chat-mode:hover:not([disabled]) {
+  background: var(--bg-elevated);
+}
+.chat-mode.active {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+#chat-input {
+  width: 100%;
+  resize: vertical;
+  min-height: 60px;
+  max-height: 200px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  box-sizing: border-box;
+}
+#chat-input:focus {
+  outline: none;
+  border-color: var(--accent, #133EFF);
+}
+#chat-input:disabled {
+  background: var(--bg-sunken, rgba(0, 0, 0, 0.03));
+  color: var(--text-tertiary);
+  cursor: not-allowed;
+}
+.chat-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+#chat-undo, #chat-send, #chat-delete {
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+#chat-undo:hover:not(:disabled),
+#chat-send:hover:not(:disabled),
+#chat-delete:hover:not(:disabled) {
+  background: var(--bg-sunken, rgba(0, 0, 0, 0.04));
+}
+#chat-undo:disabled, #chat-send:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+#chat-delete {
+  color: #b91c1c;
+  border-color: #fecaca;
+}
+#chat-delete:hover:not(:disabled) {
+  background: #fef2f2;
+  border-color: #fca5a5;
+}
+#chat-send {
+  background: var(--accent, #133EFF);
+  color: #fff;
+  border-color: var(--accent, #133EFF);
+}
+#chat-send:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+.chat-error {
+  font-size: 12px;
+  color: #ff5722;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: rgba(255, 87, 34, 0.08);
 }
 
 /* ============ Screen switching (config ↔ pipeline) ============ */
@@ -1071,6 +1506,94 @@ body.config-active #config-screen { display: flex; }
   margin-top: 6px;
 }
 
+/* ============ User-uploaded image library (homepage) ============ */
+.user-image-picker-label {
+  display: block;
+  margin-top: 14px;
+}
+.user-image-picker > input[type="file"] {
+  display: block;
+  width: 100%;
+  padding: 8px 0;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text-secondary);
+}
+.user-image-picker .file-note {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin: 6px 0 10px;
+}
+.user-image-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.user-image-row {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) minmax(180px, 2fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.08));
+  border-radius: 8px;
+  background: var(--surface-2, rgba(0, 0, 0, 0.02));
+}
+.user-image-thumb {
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+  border-radius: 6px;
+  background: var(--surface-3, rgba(0, 0, 0, 0.05));
+}
+.user-image-meta {
+  min-width: 0;
+}
+.user-image-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.user-image-sub {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-top: 2px;
+}
+.user-image-desc-wrap {
+  min-width: 0;
+}
+.user-image-desc {
+  width: 100%;
+  resize: vertical;
+  min-height: 36px;
+  font-size: 12px;
+  font-family: inherit;
+  padding: 4px 6px;
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
+  border-radius: 6px;
+  background: var(--surface, #fff);
+  color: var(--text-primary);
+}
+.user-image-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+@media (max-width: 640px) {
+  .user-image-row {
+    grid-template-columns: 48px minmax(0, 1fr);
+    grid-template-rows: auto auto auto;
+  }
+  .user-image-thumb { grid-row: span 3; }
+  .user-image-actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+}
+
 /* ============ Locked credential fields (CLI / .env) ============ */
 /* Applied via JS to inputs whose values come from --api-base etc.
    or SHUTTLESLIDE_* env vars. Readonly (not disabled) so the value
@@ -1299,3 +1822,1286 @@ input.locked-field:focus {
   opacity: 0.4;
   pointer-events: none;
 }
+
+/* ------------------------------------------------------------------ */
+/* Theme color swatch — click-to-edit via native <input type="color"> */
+/* ------------------------------------------------------------------ */
+/* The <label> wraps a transparent color input over the swatch circle.
+   Clicking anywhere on the label opens the OS color picker; change
+   fires once the user picks a new color and closes the picker. */
+.color-swatch {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 0 8px 8px 0;
+  width: 72px;
+  position: relative;
+  cursor: pointer;
+  user-select: none;
+}
+.color-swatch .swatch-circle {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  border: 1px solid var(--border, #ddd);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.05);
+  transition: transform 0.15s, border-color 0.15s;
+}
+.color-swatch:hover .swatch-circle {
+  transform: scale(1.06);
+  border-color: var(--accent);
+}
+.color-swatch .swatch-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+.color-swatch .swatch-hex {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: monospace;
+}
+/* The actual color input: invisible but interactive, sized to cover the
+   swatch circle so the click target is generous. Opacity:0 keeps it
+   clickable for the browser's native picker trigger. */
+.color-swatch .swatch-color-input {
+  position: absolute;
+  top: 0;
+  left: 8px;
+  width: 56px;
+  height: 56px;
+  opacity: 0;
+  cursor: pointer;
+  border: none;
+  padding: 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Image slot badges / Replace buttons (#3)                            */
+/* ------------------------------------------------------------------ */
+/* Thumbnail wrap holds the image/SVG + a corner badge. Badge appears
+   on hover for raster slots (Replace action) and is always-visible
+   for SVG slots (type indicator only — non-interactive). */
+.thumb-image-wrap {
+  position: relative;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.thumb-type-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 2px 6px;
+  border-radius: 3px;
+  letter-spacing: 0.3px;
+  pointer-events: none;
+  user-select: none;
+}
+.thumb-type-svg {
+  background: rgba(99, 102, 241, 0.85);  /* var(--accent) with alpha */
+  color: white;
+}
+.thumb-type-image {
+  /* Visible on hover so it doesn't crowd every thumbnail at once */
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.thumb-image-wrap:hover .thumb-type-image {
+  opacity: 1;
+}
+/* The Replace badge is a real <button> — restore pointer events so
+   it's clickable through the .thumb-type-badge pointer-events:none. */
+.thumb-replace-btn {
+  pointer-events: auto;
+  cursor: pointer;
+  border: none;
+  background: var(--accent);
+  color: white;
+}
+.thumb-replace-btn:hover {
+  background: var(--accent-hover);
+}
+
+/* Preview-pane "Replace image" button — primary-style, larger target. */
+.preview-replace-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-active);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.preview-replace-btn:hover {
+  background: var(--accent);
+  color: white;
+}
+
+/* Hint shown under SVG previews — explains why no Replace button. */
+.preview-hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  padding: 6px 10px;
+  background: var(--bg-elevated);
+  border-radius: 4px;
+  border-left: 2px solid var(--accent);
+}
+
+/* Disabled Upload button on SVG targets — visible but inactive. */
+.chat-mode:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ------------------------------------------------------------------ */
+/* SVG element editor (images stage, #5a)                              */
+/* ------------------------------------------------------------------ */
+/* The host wraps a toolbar + a white canvas holding the inline SVG.
+   SVG payload is inserted via innerHTML so the <svg> becomes a real
+   DOM subtree we can attach listeners to. */
+.svg-edit-host {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  position: relative;
+}
+/* 默认非编辑态：svg-canvas 上覆盖一个「双击进入编辑」浮层。
+   pointer-events: none 让 hover 提示不挡 SVG 的双击事件 */
+.svg-edit-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-standard),
+              background var(--dur-fast) var(--ease-standard);
+}
+.svg-edit-host:hover .svg-edit-overlay {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.55);
+}
+/* 进入编辑态后隐藏 overlay */
+.svg-edit-host.editing .svg-edit-overlay {
+  display: none;
+}
+.svg-edit-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border, #ddd);
+  border-radius: 4px;
+  font-size: 12px;
+}
+.svg-edit-toolbar .svg-edit-hint {
+  color: var(--text-tertiary);
+  font-style: italic;
+  font-size: 11px;
+  opacity: 0.85;
+  flex: 1;
+  user-select: none;
+}
+.svg-edit-toolbar .svg-edit-hint::before {
+  content: "💡 ";
+  font-style: normal;
+}
+.svg-edit-toolbar button {
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 3px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.svg-edit-toolbar .svg-commit-btn {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+.svg-edit-toolbar .svg-commit-btn:hover { background: var(--accent-hover); }
+.svg-edit-toolbar .svg-cancel-btn {
+  background: transparent;
+  color: var(--text-secondary);
+  border-color: var(--border, #ddd);
+}
+.svg-edit-toolbar .svg-cancel-btn:hover { background: var(--bg-canvas); }
+
+/* ============ Theme edit host — toolbar with Commit/Cancel ============ */
+/* Always visible (no separate view/edit mode). Color picker changes go
+   into a local draft; only Commit contacts the server. */
+.theme-edit-host {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  position: relative;
+}
+.theme-edit-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border, #ddd);
+  border-radius: 4px;
+  font-size: 12px;
+}
+.theme-edit-toolbar .theme-edit-hint {
+  color: var(--text-tertiary);
+  font-style: italic;
+  font-size: 11px;
+  opacity: 0.85;
+  flex: 1;
+  user-select: none;
+}
+.theme-edit-toolbar button {
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 3px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.theme-edit-toolbar .theme-commit-btn {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+.theme-edit-toolbar .theme-commit-btn:hover { background: var(--accent-hover); }
+.theme-edit-toolbar .theme-cancel-btn {
+  background: transparent;
+  color: var(--text-secondary);
+  border-color: var(--border, #ddd);
+}
+.theme-edit-toolbar .theme-cancel-btn:hover { background: var(--bg-canvas); }
+.theme-edit-body { position: relative; }
+
+.svg-canvas {
+  background: white;
+  padding: 12px;
+  border-radius: 4px;
+  border: 1px solid var(--border, #eee);
+  text-align: center;
+  /* SVG fills width, native aspect ratio preserved by the SVG's viewBox */
+}
+.svg-canvas svg {
+  max-width: 100%;
+  height: auto;
+}
+/* Selected element highlight — uses CSS outline for SVGElement which
+   works in Chrome/Edge/Safari (Firefox support is recent). Falls back
+   to a drop-shadow filter that always works. */
+.svg-element-selected {
+  outline: 2px dashed var(--accent) !important;
+  outline-offset: 2px;
+  filter: drop-shadow(0 0 4px var(--accent-ring));
+}
+.svg-canvas svg text.svg-element-selected {
+  cursor: text;
+}
+
+/* 浮层 HTML input — 所见即所得编辑 SVG <text>。
+   绝对定位到文字屏幕位置，字号/字体/颜色由 JS 内联设置匹配 SVG text。
+   背景半透明 + 边框让用户清楚这是个编辑框（不是直接画布）。 */
+.svg-canvas {
+  position: relative;
+}
+.svg-text-editor-input {
+  position: absolute;
+  padding: 0 2px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid var(--accent);
+  border-radius: 2px;
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent-ring);
+  line-height: 1;
+  z-index: 10;
+}
+
+/* ---------------------------------------------------------------------------
+   Layers panel — floating overlay in #preview top-right.
+   Lists every top-level element + every img.shuttleslide-svg-placeholder
+   in the current slide so users can pick obscured elements.
+   ------------------------------------------------------------------------- */
+#layers-panel {
+  position: absolute;
+  top: 44px;            /* below the #preview h3 header */
+  right: 16px;
+  width: 240px;
+  max-height: 70%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  z-index: 30;
+  font: 400 12px/1.4 var(--font-sans);
+  color: var(--text-primary);
+  overflow: hidden;
+}
+#layers-panel[hidden] { display: none; }
+.layers-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-canvas);
+  flex-shrink: 0;
+}
+.layers-panel-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+}
+#layers-close {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--text-tertiary);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+  border-radius: 3px;
+}
+#layers-close:hover {
+  color: var(--text-primary);
+  background: var(--bg-overlay);
+}
+#layers-list {
+  overflow-y: auto;
+  padding: 4px 0;
+  flex: 1;
+  scrollbar-width: thin;
+}
+.layers-panel-empty {
+  padding: 12px 14px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  margin: 0;
+}
+.layer-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  color: var(--text-secondary);
+  transition: background var(--dur-fast) var(--ease-standard),
+              color var(--dur-fast) var(--ease-standard),
+              border-color var(--dur-fast) var(--ease-standard);
+}
+.layer-item:hover {
+  background: var(--bg-overlay);
+  color: var(--text-primary);
+}
+.layer-item.layer-item--active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-left-color: var(--accent);
+}
+.layer-item__icon {
+  flex-shrink: 0;
+  width: 14px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-tertiary);
+}
+.layer-item--image .layer-item__icon {
+  color: var(--accent);
+}
+.layer-item--active .layer-item__icon {
+  color: inherit;
+}
+.layer-item__label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.layer-item__tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Flash animation when jumpToImageThumb scrolls a thumbnail into view. */
+.thumb-flash {
+  animation: thumb-flash 1.5s var(--ease-standard) 0s 1;
+}
+@keyframes thumb-flash {
+  0%   { box-shadow: 0 0 0 0 var(--accent); outline: 2px solid var(--accent); }
+  60%  { box-shadow: 0 0 0 6px transparent; outline: 2px solid var(--accent); }
+  100% { box-shadow: 0 0 0 0 transparent; outline: 2px solid transparent; }
+}
+
+/* Layers panel highlight — a div in #preview positioned over the
+   selected slide element. Lives in the PARENT doc, not the iframe,
+   so it isn't affected by ancestor opacity, overflow:hidden, or the
+   iframe's CSS transform: scale(). See app.js showLayerOverlay(). */
+#shuttleslide-layer-overlay {
+  position: absolute;
+  pointer-events: none;
+  border: 3px solid #6366f1;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.7) inset,
+    0 0 0 1px rgba(255, 255, 255, 0.7),
+    0 0 14px rgba(99, 102, 241, 0.7);
+  z-index: 50;
+  border-radius: 2px;
+}
+
+/* ---------------------------------------------------------------------------
+   Sidebar tabs + History panel (#4)
+   ------------------------------------------------------------------------- */
+.sidebar-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 6px 8px 0;
+  background: var(--bg-elevated);
+  flex-shrink: 0;
+}
+.sidebar-tab {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 8px 12px 10px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px; /* overlap the parent's bottom border */
+  transition: color var(--dur-fast) var(--ease-standard),
+              border-color var(--dur-fast) var(--ease-standard);
+}
+.sidebar-tab:hover {
+  color: var(--text-primary);
+}
+.sidebar-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.sidebar-tab.has-new::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--error);
+  vertical-align: middle;
+  animation: tab-pulse 1.6s var(--ease-standard) infinite;
+}
+@keyframes tab-pulse {
+  0%, 100% { opacity: 0.4; transform: scale(0.85); }
+  50%      { opacity: 1;   transform: scale(1.15); }
+}
+
+#history-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+#history-list .placeholder {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  padding: 12px 4px;
+  text-align: center;
+}
+
+.history-entry {
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  box-shadow: var(--shadow-xs);
+}
+.history-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.history-action {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.history-time {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.history-summary {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  background: var(--bg-elevated);
+  padding: 3px 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.history-restore-btn {
+  align-self: flex-start;
+  margin-top: 2px;
+  appearance: none;
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-standard),
+              color var(--dur-fast) var(--ease-standard),
+              border-color var(--dur-fast) var(--ease-standard);
+}
+.history-restore-btn:hover {
+  background: var(--error);
+  color: #fff;
+  border-color: var(--error);
+}
+
+/* Pending-revert state: card carries accent left-border so the user
+   can spot un-committed reverts at a glance. */
+.history-entry.pending {
+  border-left: 3px solid var(--accent);
+  background: var(--bg-elevated);
+}
+.history-pending-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 2px;
+}
+.history-unrevert-btn,
+.history-commit-btn {
+  appearance: none;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background var(--dur-fast) var(--ease-standard),
+              color var(--dur-fast) var(--ease-standard),
+              border-color var(--dur-fast) var(--ease-standard);
+}
+.history-unrevert-btn {
+  background: var(--bg-canvas);
+  color: var(--text-secondary);
+  border-color: var(--border-default);
+}
+.history-unrevert-btn:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+.history-commit-btn {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.history-commit-btn:hover {
+  background: var(--accent-hover, var(--accent));
+}
+
+/* =====================================================================
+   Stale-mark UI — badges on thumbnails + banner above the preview.
+   ===================================================================== */
+
+.thumb-stale {
+  /* Subtle warning ring around the whole thumb card. */
+  outline: 2px solid var(--warn, #FF5722);
+  outline-offset: -2px;
+}
+
+.thumb-stale-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  padding: 2px 6px;
+  background: var(--warn, #FF5722);
+  color: white;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  border-radius: 3px;
+  pointer-events: none;   /* the thumb's click handler navigates; badge is decorative */
+  box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+  z-index: 2;
+}
+
+/* The thumb's existing position:relative comes from the .thumb rule.
+   If a future refactor removes it, the badge would fall back to
+   absolute positioning against the nearest positioned ancestor —
+   acceptable, but we re-assert here so a regression is visible. */
+.thumb {
+  position: relative;
+}
+
+.stale-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  background: rgba(255, 87, 34, 0.08);
+  border: 1px solid rgba(255, 87, 34, 0.35);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.stale-banner-icon {
+  font-size: 18px;
+  color: var(--warn, #FF5722);
+  line-height: 1;
+}
+
+.stale-banner-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.stale-banner-title {
+  font-weight: 600;
+  color: var(--text-primary, #1F2937);
+}
+
+.stale-banner-reason {
+  color: var(--text-tertiary, #6B7280);
+  font-size: 11px;
+  margin-top: 2px;
+  word-break: break-word;
+}
+
+.stale-banner-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.stale-btn {
+  padding: 4px 10px;
+  font-size: 11px;
+  border-radius: 4px;
+  border: 1px solid var(--border, #E5E7EB);
+  background: white;
+  color: var(--text-primary, #1F2937);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.stale-btn:hover:not(:disabled) {
+  background: var(--bg-hover, #F9FAFB);
+  border-color: var(--text-tertiary, #6B7280);
+}
+
+.stale-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.stale-btn-primary {
+  background: var(--accent, #00CD82);
+  color: white;
+  border-color: var(--accent, #00CD82);
+}
+
+.stale-btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover, #00B377);
+  border-color: var(--accent-hover, #00B377);
+}
+
+.stale-btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-tertiary, #6B7280);
+}
+
+.stale-btn-ghost:hover:not(:disabled) {
+  background: rgba(0,0,0,0.04);
+  border-color: transparent;
+}
+
+/* Toast — transient confirmation bottom-right. */
+.toast {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  padding: 8px 14px;
+  background: #1F2937;
+  color: white;
+  font-size: 12px;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.18s, transform 0.18s;
+  pointer-events: none;
+  z-index: 1000;
+}
+
+.toast.toast-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.toast[data-kind="error"] {
+  background: var(--warn, #FF5722);
+}
+
+/* ============ Canvas aspect-ratio picker (config screen) ============ */
+/* Visible only when slidecraft review --canvas sets canvas_mode. The
+   picker lives inside the Style fieldset; the server reports
+   canvas_mode via /api/defaults and JS removes [hidden]. */
+.canvas-ratio-picker {
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-subtle, #d0d7de);
+  border-radius: var(--radius-md, 8px);
+  background: var(--bg-canvas, #f6f8fa);
+}
+.canvas-ratio-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary, #57606a);
+  margin-bottom: 10px;
+}
+.canvas-ratio-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+.canvas-ratio-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-default, #d0d7de);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--card, #ffffff);
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-primary, #1f2328);
+  transition: border-color 0.15s, background 0.15s;
+}
+.canvas-ratio-option:hover {
+  border-color: var(--accent, #0969da);
+}
+.canvas-ratio-option input[type="radio"] {
+  /* Hide the native radio dot — the .canvas-ratio-shape + name is the
+     visible affordance, the option's selected state is shown via the
+     container's accent border below. */
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  width: 0;
+  height: 0;
+}
+.canvas-ratio-option:has(input[type="radio"]:checked) {
+  border-color: var(--accent, #0969da);
+  background: color-mix(in srgb, var(--accent, #0969da) 8%, transparent);
+}
+.canvas-ratio-shape {
+  /* Visual indicator of landscape / portrait / square. Sized so all
+     three shapes have the same visual area (~64px²) — makes the ratio
+     difference scannable at a glance without reading the numbers. */
+  display: inline-block;
+  background: currentColor;
+  opacity: 0.7;
+  border-radius: 2px;
+}
+.canvas-ratio-shape[data-shape="landscape"] { width: 28px; height: 16px; }
+.canvas-ratio-shape[data-shape="portrait"]  { width: 16px; height: 28px; }
+.canvas-ratio-shape[data-shape="square"]    { width: 22px; height: 22px; }
+.canvas-ratio-name {
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+.canvas-ratio-custom {
+  flex: 1 1 100%;
+  margin-top: 4px;
+}
+.canvas-ratio-custom input[type="text"] {
+  flex: 1;
+  padding: 4px 8px;
+  border: 1px solid var(--border-default, #d0d7de);
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: var(--font-mono, monospace);
+  background: var(--card, #ffffff);
+  color: var(--text-primary, #1f2328);
+}
+.canvas-ratio-custom input[type="text"]:focus {
+  outline: none;
+  border-color: var(--accent, #0969da);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #0969da) 25%, transparent);
+}
+
+/* ===================================================================== */
+/* Outline structured editor                                              */
+/* ===================================================================== */
+
+.outline-edit-host {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  position: relative;
+}
+
+.outline-edit-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg-elevated, #f6f8fa);
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 4px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.outline-edit-hint {
+  color: var(--text-tertiary, #6e7681);
+  font-style: italic;
+  font-size: 11px;
+  opacity: 0.85;
+  flex: 1;
+}
+
+.outline-edit-toolbar button {
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 3px;
+  cursor: pointer;
+  border: 1px solid var(--border, #d0d7de);
+  background: transparent;
+  color: var(--text-primary, #1f2328);
+}
+
+.outline-edit-toolbar .outline-commit-btn {
+  background: var(--accent, #0969da);
+  color: white;
+  border-color: var(--accent, #0969da);
+}
+.outline-edit-toolbar .outline-commit-btn:hover {
+  background: var(--accent-hover, #0860ca);
+}
+
+.outline-edit-toolbar .outline-cancel-btn {
+  background: transparent;
+  color: var(--text-secondary, #57606a);
+  border-color: var(--border, #d0d7de);
+}
+.outline-edit-toolbar .outline-cancel-btn:hover {
+  background: var(--bg-canvas, #ffffff);
+}
+
+.outline-edit-toolbar .outline-add-btn,
+.outline-edit-toolbar .outline-rebalance-btn {
+  background: transparent;
+  color: var(--text-primary, #1f2328);
+  border-color: var(--border, #d0d7de);
+}
+.outline-edit-toolbar .outline-add-btn:hover,
+.outline-edit-toolbar .outline-rebalance-btn:hover {
+  background: var(--bg-canvas, #ffffff);
+}
+
+.outline-edit-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.outline-entry {
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 4px;
+  padding: 10px 12px;
+  background: var(--card, #ffffff);
+}
+
+.outline-entry-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border, #eaeef2);
+}
+
+.outline-entry-label {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-primary, #1f2328);
+}
+
+.outline-entry-delete {
+  background: transparent;
+  border: none;
+  color: var(--text-tertiary, #6e7681);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+.outline-entry-delete:hover {
+  background: #ffe5e5;
+  color: #cf222e;
+}
+
+.outline-entry-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.outline-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+}
+
+.outline-field-label {
+  color: var(--text-tertiary, #6e7681);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-size: 11px;
+}
+
+.outline-field input[type="text"],
+.outline-field textarea {
+  font-size: 13px;
+  padding: 5px 8px;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 3px;
+  font-family: inherit;
+  resize: vertical;
+  background: var(--bg-canvas, #ffffff);
+  color: var(--text-primary, #1f2328);
+}
+.outline-field input[type="text"]:focus,
+.outline-field textarea:focus {
+  outline: none;
+  border-color: var(--accent, #0969da);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #0969da) 25%, transparent);
+}
+
+.outline-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.outline-list-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.outline-list-row input {
+  flex: 1;
+  font-size: 12px;
+  padding: 4px 7px;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 3px;
+  background: var(--bg-canvas, #ffffff);
+  color: var(--text-primary, #1f2328);
+}
+.outline-list-row input:focus {
+  outline: none;
+  border-color: var(--accent, #0969da);
+}
+
+.outline-list-remove {
+  background: transparent;
+  border: none;
+  color: var(--text-tertiary, #6e7681);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+.outline-list-remove:hover {
+  background: #ffe5e5;
+  color: #cf222e;
+}
+
+.outline-list-add {
+  align-self: flex-start;
+  background: transparent;
+  border: 1px dashed var(--border, #d0d7de);
+  color: var(--text-secondary, #57606a);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 3px;
+  margin-top: 4px;
+}
+.outline-list-add:hover {
+  background: var(--bg-elevated, #f6f8fa);
+  color: var(--text-primary, #1f2328);
+}
+
+.outline-images-group {
+  margin-top: 4px;
+  font-size: 12px;
+}
+.outline-images-group summary {
+  cursor: pointer;
+  color: var(--text-secondary, #57606a);
+  font-weight: 500;
+  padding: 3px 0;
+}
+.outline-images-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 6px 0;
+}
+
+.outline-image-spec {
+  border: 1px solid var(--border, #eaeef2);
+  border-radius: 3px;
+  padding: 6px 8px;
+  background: var(--bg-elevated, #f6f8fa);
+}
+
+.outline-image-spec-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 5px;
+  font-size: 11px;
+  color: var(--text-tertiary, #6e7681);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.outline-image-spec-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px 8px;
+  font-size: 11px;
+}
+.outline-image-spec-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--text-tertiary, #6e7681);
+}
+.outline-image-spec-grid label.full-width {
+  grid-column: 1 / -1;
+}
+.outline-image-spec-grid input {
+  font-size: 12px;
+  padding: 3px 6px;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 2px;
+  background: var(--bg-canvas, #ffffff);
+  color: var(--text-primary, #1f2328);
+}
+.outline-image-spec-grid input:focus {
+  outline: none;
+  border-color: var(--accent, #0969da);
+}
+
+.outline-empty {
+  padding: 24px 12px;
+  text-align: center;
+  color: var(--text-tertiary, #6e7681);
+  font-style: italic;
+  font-size: 13px;
+}
+
+/* ===================================================================== */
+/* Modal (Add Slide)                                                     */
+/* ===================================================================== */
+
+.ss-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.ss-modal-card {
+  background: var(--card, #ffffff);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  width: min(640px, 92vw);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.ss-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border, #eaeef2);
+  background: var(--bg-elevated, #f6f8fa);
+}
+.ss-modal-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+.ss-modal-close {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  color: var(--text-tertiary, #6e7681);
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+.ss-modal-close:hover {
+  background: var(--bg-canvas, #ffffff);
+  color: var(--text-primary, #1f2328);
+}
+
+.ss-modal-body {
+  padding: 14px;
+  overflow-y: auto;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ss-modal-mode-toggle {
+  display: flex;
+  gap: 16px;
+  font-size: 13px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border, #eaeef2);
+}
+.ss-modal-mode-toggle label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+
+.ss-modal-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ss-modal-section[hidden] {
+  display: none;
+}
+
+.ss-modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-secondary, #57606a);
+}
+.ss-modal-field input[type="text"],
+.ss-modal-field textarea {
+  font-size: 13px;
+  padding: 6px 8px;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 3px;
+  font-family: inherit;
+  background: var(--bg-canvas, #ffffff);
+  color: var(--text-primary, #1f2328);
+  resize: vertical;
+}
+.ss-modal-field textarea:focus,
+.ss-modal-field input:focus {
+  outline: none;
+  border-color: var(--accent, #0969da);
+}
+.ss-modal-field select {
+  font-size: 13px;
+  padding: 5px 8px;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 3px;
+  background: var(--bg-canvas, #ffffff);
+  color: var(--text-primary, #1f2328);
+}
+
+.ss-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border, #eaeef2);
+  background: var(--bg-elevated, #f6f8fa);
+}
+.ss-modal-error {
+  color: #cf222e;
+  font-size: 12px;
+  flex: 1;
+  text-align: left;
+}
+.ss-modal-submit {
+  background: var(--accent, #0969da);
+  color: white;
+  border: 1px solid var(--accent, #0969da);
+  padding: 6px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.ss-modal-submit:hover:not(:disabled) {
+  background: var(--accent-hover, #0860ca);
+}
+.ss-modal-submit:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+

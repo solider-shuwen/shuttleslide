@@ -63,22 +63,60 @@ class TableConverter:
             text = element.data[row_idx][col_idx]
 
         # Get cell style
-        cell_style = ""
-        bg_color = None
+        style_info = {}
         if row_idx < len(element.cell_styles) and col_idx < len(element.cell_styles[row_idx]):
             style_info = element.cell_styles[row_idx][col_idx]
-            bg_color = style_info.get("background_color")
 
         # Build cell attributes
         attrs = []
 
-        # Add styling
+        # Build inline styles.  Always include border + padding so the table
+        # looks like a table even when the PPT cell has no explicit fill; then
+        # layer background-color, text color, alignment, font properties, and
+        # vertical anchor as extracted by the parser.
         styles = [
             "border: 1px solid #000",
             "padding: 4px",
         ]
+
+        bg_color = style_info.get("background_color")
         if bg_color:
             styles.append(f"background-color: {bg_color}")
+
+        text_color = style_info.get("text_color")
+        if text_color:
+            styles.append(f"color: {text_color}")
+
+        alignment = style_info.get("alignment")
+        if alignment:
+            styles.append(f"text-align: {alignment}")
+
+        vertical_anchor = style_info.get("vertical_anchor")
+        if vertical_anchor:
+            # CSS vertical-align on <td> only works for inline content; for
+            # block content, the cell needs an inner wrapper.  We use
+            # vertical-align which works for the common single-line case.
+            styles.append(f"vertical-align: {vertical_anchor}")
+
+        font_size = style_info.get("font_size")
+        if font_size is not None:
+            styles.append(f"font-size: {font_size}pt")
+
+        bold = style_info.get("bold")
+        if bold is True:
+            styles.append("font-weight: bold")
+        elif bold is False:
+            styles.append("font-weight: normal")
+
+        italic = style_info.get("italic")
+        if italic is True:
+            styles.append("font-style: italic")
+        elif italic is False:
+            styles.append("font-style: normal")
+
+        font_name = style_info.get("font_name")
+        if font_name:
+            styles.append(f"font-family: '{font_name}'")
 
         if styles:
             attrs.append(f'style="{"; ".join(styles)}"')

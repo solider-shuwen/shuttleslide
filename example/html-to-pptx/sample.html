@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <title>Shuttleslide — Sample Slide HTML</title>
+    <style>
+        body {
+            margin: 0;
+            background: #e2e8f0;
+        }
+
+        /* The .slide div is what the rule extractor treats as one slide.
+           Any reasonable dimensions work — positions are converted to
+           percentages of the slide box before being written to PPTX. */
+        .slide {
+            position: relative;
+            width: 1280px;
+            height: 720px;
+            margin: 0 auto;
+            background: #ffffff;
+            font-family: "Helvetica Neue", Arial, sans-serif;
+            color: #1a202c;
+            overflow: hidden;
+        }
+
+        .title {
+            position: absolute;
+            top: 80px;
+            left: 80px;
+            width: 1120px;
+            font-size: 64px;
+            font-weight: 700;
+            color: #1a365d;
+            letter-spacing: -1px;
+        }
+
+        .subtitle {
+            position: absolute;
+            top: 180px;
+            left: 80px;
+            width: 1120px;
+            font-size: 28px;
+            color: #4a5568;
+        }
+
+        .card {
+            position: absolute;
+            top: 300px;
+            width: 480px;
+            padding: 32px;
+            background: #f7fafc;
+            border-left: 4px solid #3182ce;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+        }
+
+        .card h3 {
+            margin: 0 0 12px 0;
+            font-size: 26px;
+            color: #2d3748;
+        }
+
+        .card p {
+            margin: 0;
+            font-size: 18px;
+            color: #4a5568;
+            line-height: 1.5;
+        }
+
+        .card-left {
+            left: 80px;
+        }
+
+        .card-right {
+            left: 720px;
+        }
+
+        .footer {
+            position: absolute;
+            bottom: 40px;
+            left: 80px;
+            font-size: 16px;
+            color: #a0aec0;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="slide">
+        <div class="title">Shuttleslide</div>
+        <div class="subtitle">Bidirectional PowerPoint &harr; HTML conversion</div>
+
+        <div class="card card-left">
+            <h3>PPTX &rarr; HTML</h3>
+            <p>Three layout modes, semantic output, round-trip metadata on every element.</p>
+        </div>
+
+        <div class="card card-right">
+            <h3>HTML &rarr; PPTX</h3>
+            <p>Native DrawingML shapes, deterministic rules, no LLM required.</p>
+        </div>
+
+        <div class="footer">github.com/solider-shuwen/shuttleslide</div>
+    </div>
+</body>
+
+</html>
