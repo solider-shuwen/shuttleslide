@@ -224,6 +224,42 @@ body {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-ring);
 }
+/* Zoom controls in preview H3 — toggle only when a .big-slide-wrapper is
+   present (slides / rendered / subtitle). Group container hides via
+   [hidden] when stage has no wrapper. */
+.preview-zoom-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 8px;
+}
+.preview-zoom-group[hidden] { display: none; }
+.preview-zoom-group .icon-btn {
+  width: 26px;
+  height: 26px;
+  font-size: 14px;
+}
+.preview-zoom-pct {
+  min-width: 42px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-overlay);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  /* Keep neighbor layout stable as the percentage digit count changes. */
+  font-variant-numeric: tabular-nums;
+  transition: background var(--dur-fast) var(--ease-standard),
+              color var(--dur-fast) var(--ease-standard);
+}
+.preview-zoom-pct:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
 /* Sun shows in light mode, moon shows in dark mode. Default (no
    data-theme attribute) = light. */
 #theme-toggle .icon-moon { display: none; }
@@ -589,6 +625,27 @@ main {
 }
 
 /* ===================================================================== */
+/* Extension stage toolbar slot — populated by extension renderers (e.g.  */
+/* shuttleslide-pro subtitle stage's global style toolbar). Sits between  */
+/* the #preview H3 row and #progress-strip, right-aligned.                */
+/* renderPreview() in app.js clears innerHTML + sets [hidden] on every    */
+/* render so the prior stage's toolbar can't leak; extension renderers   */
+/* unhide and fill this when they need it.                               */
+/* ===================================================================== */
+#preview-stage-toolbar {
+  margin: 0 16px;
+  min-height: 0;
+}
+#preview-stage-toolbar[hidden] { display: none; }
+#preview-stage-toolbar:not([hidden]) {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ===================================================================== */
 /* Progress strip — replaces the static #status-banner in #preview.       */
 /* Prominent stage indicator with animated bar. States control colour +   */
 /* animation:                                                            */
@@ -709,6 +766,10 @@ main {
 #preview-content {
   flex: 1;
   overflow-y: auto;
+  /* overflow-x auto so Ctrl+wheel zoom can grow .big-slide-wrapper beyond
+     the pane width and still be scrollable horizontally. Default visible
+     would clip the zoomed slide. */
+  overflow-x: auto;
   padding: 16px;
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);

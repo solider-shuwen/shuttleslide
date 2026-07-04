@@ -446,16 +446,97 @@ function setCanvasDimsFromState(stateData) {
   scaleBigSlide();
 }
 
+// User-controlled zoom multiplier, persisted in localStorage so it
+// survives page refresh and carries across slides / stages / sessions.
+// Range [0.25, 4]. Applied by changing wrapper inline width — iframe
+// scale (wrapper.clientWidth / canvasW) follows automatically.
+const ZOOM_STORAGE_KEY = "shuttleslide:previewZoom";
+function _loadUserZoom() {
+  const v = parseFloat(localStorage.getItem(ZOOM_STORAGE_KEY) || "");
+  return Number.isFinite(v) && v > 0 ? v : 1.0;
+}
+function _saveUserZoom() {
+  try { localStorage.setItem(ZOOM_STORAGE_KEY, String(userZoom)); } catch (_) {}
+}
+let userZoom = _loadUserZoom();
+
 function scaleBigSlide() {
   const wrapper = document.querySelector('.big-slide-wrapper');
   if (!wrapper) return;
   const iframe = wrapper.querySelector('iframe');
   if (!iframe) return;
   const canvasW = getCanvasWidthPx();
+  // Drive zoom through wrapper width so aspect-ratio + iframe scale follow.
+  // userZoom=1 → clear inline width to honor CSS default.
+  wrapper.style.width = (userZoom === 1 ? '' : (100 * userZoom) + '%');
   const scale = wrapper.clientWidth / canvasW;
   iframe.style.transform = `scale(${scale})`;
 }
 window.addEventListener('resize', scaleBigSlide);
+
+// Ctrl/Cmd+wheel zoom on the preview pane — Figma-style: mouse anchor stays.
+// Only fires when the cursor is over a .big-slide-wrapper, so non-wrapper
+// stages (motion_design, render_video, voiceover) keep browser-default wheel.
+(function () {
+  const pcEl = document.getElementById('preview-content');
+  if (!pcEl) return;
+  pcEl.addEventListener('wheel', function (e) {
+    if (!e.ctrlKey && !e.metaKey) return;
+    const wrapper = e.target.closest && e.target.closest('.big-slide-wrapper');
+    if (!wrapper) return;
+    e.preventDefault();
+    const oldZoom = userZoom;
+    const delta = -e.deltaY / 500;
+    userZoom = Math.max(0.25, Math.min(4, userZoom * (1 + delta)));
+    if (userZoom === oldZoom) return;
+    _saveUserZoom();
+    const pcRect = pcEl.getBoundingClientRect();
+    const sx = pcEl.scrollLeft + (e.clientX - pcRect.left);
+    const sy = pcEl.scrollTop + (e.clientY - pcRect.top);
+    scaleBigSlide();
+    const ratio = userZoom / oldZoom;
+    pcEl.scrollLeft = sx * ratio - (e.clientX - pcRect.left);
+    pcEl.scrollTop = sy * ratio - (e.clientY - pcRect.top);
+    if (window.__previewZoom) window.__previewZoom.updatePct();
+  }, { passive: false, capture: true });
+})();
+
+// Zoom button controls — the reliable fallback for environments where
+// browser-native Ctrl+= / Ctrl+wheel / pinch are intercepted before the
+// page sees them (Windows trackpad pinch, iframe wheel capture, etc.).
+(function () {
+  const group = document.getElementById('preview-zoom-group');
+  const outBtn = document.getElementById('preview-zoom-out');
+  const inBtn = document.getElementById('preview-zoom-in');
+  const pctBtn = document.getElementById('preview-zoom-pct');
+  if (!group || !outBtn || !inBtn || !pctBtn) return;
+
+  function fmtPct(z) { return Math.round(z * 100) + '%'; }
+  function updatePct() { pctBtn.textContent = fmtPct(userZoom); }
+
+  outBtn.addEventListener('click', () => {
+    userZoom = Math.max(0.25, userZoom / 1.2);
+    _saveUserZoom();
+    scaleBigSlide();
+    updatePct();
+  });
+  inBtn.addEventListener('click', () => {
+    userZoom = Math.min(4, userZoom * 1.2);
+    _saveUserZoom();
+    scaleBigSlide();
+    updatePct();
+  });
+  pctBtn.addEventListener('click', () => {
+    userZoom = 1.0;
+    _saveUserZoom();
+    scaleBigSlide();
+    updatePct();
+  });
+
+  // Expose updatePct + group so renderPreview can toggle visibility and the
+  // wheel handler can keep % in sync when Ctrl+wheel works.
+  window.__previewZoom = { group, updatePct };
+})();
 
 // =====================================================================
 // Top stage bar — horizontal tabs, clickable when completed
@@ -593,6 +674,20 @@ function buildThumbItems(snap) {
       };
     });
   }
+  if (stage === "subtitle") {
+    // Extension stage (shuttleslide-pro). Subtitle runs AFTER slides,
+    // so the slides snapshot exists and /artifact/slides/{i} resolves.
+    // Reuse the same iframe thumbnail pattern as the slides stage so
+    // users pick the slide on the left and the renderer focuses on
+    // that one slide in the preview pane.
+    const slides = view.slides || [];
+    return slides.map((sl, i) => ({
+      html: `<div class="thumb-label">Slide ${i + 1}</div>
+             <div class="thumb-slide">
+               <iframe src="/artifact/slides/${i}${thumbBust}" scrolling="no"></iframe>
+             </div>`,
+    }));
+  }
   return [];
 }
 
@@ -641,6 +736,39 @@ function renderThumbnails() {
 // Preview — middle column. Renders activeStage @ activeItemIdx.
 // =====================================================================
 function renderPreview() {
+  // Sync the % label with the persisted zoom (userZoom itself is NOT reset —
+  // the user's chosen ratio carries across slides / stages / sessions, see
+  // _loadUserZoom / _saveUserZoom).
+  if (window.__previewZoom) window.__previewZoom.updatePct();
+
+  // Toggle zoom controls visibility — only show when a wrapper is in the DOM
+  // (slides / rendered / subtitle). Other stages use custom renderers.
+  // Schedule via rAF because wrapper is created later in this function
+  // (setPreview / extEntry.render); reading at the entry point would always
+  // find no wrapper and wrongly hide the buttons. rAF runs after all
+  // synchronous DOM mutations from this render settle. While we're in the
+  // rAF, re-apply the persisted zoom to the freshly-created wrapper too —
+  // iframe load will eventually do the same, but doing it now avoids a flash
+  // of the default 100% before the load event fires.
+  requestAnimationFrame(() => {
+    const zoomGroup = document.getElementById('preview-zoom-group');
+    if (zoomGroup) {
+      const hasWrapper = !!document.querySelector('.big-slide-wrapper');
+      zoomGroup.hidden = !hasWrapper;
+      if (hasWrapper && userZoom !== 1) scaleBigSlide();
+    }
+  });
+
+  // Clear the extension stage toolbar slot on every render so the prior
+  // stage's toolbar can't leak into the next. Extension renderers
+  // (e.g. subtitle's global style toolbar) re-populate this if they
+  // need it; builtin stages leave it empty.
+  const stageToolbarEl = document.getElementById("preview-stage-toolbar");
+  if (stageToolbarEl) {
+    stageToolbarEl.innerHTML = "";
+    stageToolbarEl.hidden = true;
+  }
+
   if (!activeStage || !snapshots[activeStage]) {
     setPreview(`<p style="color:var(--text-tertiary);">No stage output yet.</p>`);
     return;
@@ -661,6 +789,12 @@ function renderPreview() {
       const host = document.createElement("div");
       host.className = "ext-renderer-host";
       host.dataset.stage = activeStage;
+      // Pass activeItemIdx + cache-buster to extension renderers via
+      // dataset so they can render per-slide content (e.g. subtitle
+      // previewing one slide at a time) without needing a global getter
+      // or signature change. Builtin stages ignore these.
+      host.dataset.idx = String(idx);
+      host.dataset.bust = `?t=${Date.now()}`;
       previewContent.appendChild(host);
       extEntry.render(snap, host);
       extOk = true;

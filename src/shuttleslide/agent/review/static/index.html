@@ -19,7 +19,7 @@
   </script>
   <!-- Pin marked version so CDN drift doesn't break the UI. -->
   <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
-  <link rel="stylesheet" href="/styles.css?v=phase31" />
+  <link rel="stylesheet" href="/styles.css?v=phase36" />
 </head>
 <body class="config-active">
   <!-- Floating theme toggle — always visible, top-right. Fixed position
@@ -261,10 +261,22 @@
 
     <section id="preview">
       <h3>Preview
+        <span id="preview-zoom-group" class="preview-zoom-group" hidden>
+          <button id="preview-zoom-out" type="button" class="icon-btn" title="Zoom out">−</button>
+          <button id="preview-zoom-pct" type="button" class="preview-zoom-pct" title="Reset to 100%">100%</button>
+          <button id="preview-zoom-in" type="button" class="icon-btn" title="Zoom in">+</button>
+        </span>
         <button id="preview-layers-btn" type="button" title="Layers (toggle element panel)">▤</button>
         <button id="preview-add-image-btn" type="button" title="Add image to slide (pick a PNG/JPEG from disk)">＋</button>
         <button id="preview-fullscreen-btn" type="button" title="Fullscreen (Esc to exit)">⛶</button>
       </h3>
+      <!-- Extension stage toolbar slot — populated by an extension renderer
+           (e.g. subtitle stage's global style toolbar). renderPreview() in
+           app.js clears this on every render so a previous stage's toolbar
+           can't leak into the next. Lives between the H3 row and
+           #progress-strip so it sits "right of Preview, above the Stage
+           status bar" per the subtitle refactor. -->
+      <div id="preview-stage-toolbar" hidden></div>
       <!-- Hidden file input driven by #preview-add-image-btn. Lives outside
            the slide iframe so change events fire even when the iframe is
            unfocused. Accept restricted to PNG/JPEG because v1 rejects SVG. -->
@@ -398,6 +410,6 @@
         .catch(function () { /* best-effort — see comment above */ });
     })();
   </script>
-  <script src="/app.js?v=phase31" defer></script>
+  <script src="/app.js?v=phase36" defer></script>
 </body>
 </html>

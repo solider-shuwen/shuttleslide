@@ -18,7 +18,8 @@ from __future__ import annotations
 
 import difflib
 import json
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional
 
 from shuttleslide.agent.review.editors.base import (
     EditResult,
@@ -27,13 +28,80 @@ from shuttleslide.agent.review.editors.base import (
     truncate_for_prompt,
 )
 
-# Map target.path → (state attribute, expected top-level type).
-# Keeping this in one place makes it easy to extend (e.g. future
-# stage_outputs edits could add their own entry here).
-_PATH_TO_STATE: Dict = {
-    ("theme",): ("theme", dict),
-    ("outline",): ("outline", list),
-}
+
+@dataclass
+class _PathHandler:
+    """Resolver for one EditTarget.path.
+
+    The expected type may be ``None`` to defer inference until apply time
+    (used by stage_outputs paths where the type is inferred from the
+    current value — a list stays a list, a dict stays a dict, a missing
+    key defaults to dict).
+    """
+    expected_type: Optional[type]
+    getter: Callable[[Any], Any]
+    setter: Callable[[Any, Any], None]
+    is_outline: bool = False
+
+
+# Resolve target.path → handler. Core state attributes are explicit;
+# ``("stage_outputs", stage_name, key)`` is a generic pattern so any
+# extension stage (subtitle, motion_design, render_video, ...) can edit
+# its own JSON-able output without core having to know the stage name.
+def _resolve_path(path: tuple) -> _PathHandler:
+    if path == ("theme",):
+        return _PathHandler(
+            expected_type=dict,
+            getter=lambda s: getattr(s, "theme", {}),
+            setter=lambda s, v: setattr(s, "theme", v),
+        )
+    if path == ("outline",):
+        return _PathHandler(
+            expected_type=list,
+            getter=lambda s: getattr(s, "outline", []),
+            setter=lambda s, v: setattr(s, "outline", v),
+            is_outline=True,
+        )
+    if len(path) == 3 and path[0] == "stage_outputs":
+        stage_name, key = path[1], path[2]
+
+        def _get(s: Any) -> Any:
+            so = getattr(s, "stage_outputs", None) or {}
+            sd = so.get(stage_name) or {}
+            return sd.get(key)
+
+        def _set(s: Any, v: Any) -> None:
+            so = getattr(s, "stage_outputs", None)
+            if so is None:
+                s.stage_outputs = {}
+                so = s.stage_outputs
+            sd = so.get(stage_name)
+            if not isinstance(sd, dict):
+                sd = {}
+                so[stage_name] = sd
+            sd[key] = v
+
+        # Defer type inference to apply time (see _infer_type below) — the
+        # expected type depends on the live value, which isn't known here.
+        return _PathHandler(expected_type=None, getter=_get, setter=_set)
+
+    raise ValueError(
+        f"JsonEditor does not know which state attribute to write for "
+        f"path {tuple(path)!r}; supported patterns: ('theme',), "
+        f"('outline',), ('stage_outputs', <stage>, <key>)"
+    )
+
+
+def _infer_expected_type(handler: _PathHandler, state: Any) -> type:
+    """For paths whose expected_type is None (stage_outputs), infer from
+    the current value. List stays list, dict stays dict, missing or
+    scalar defaults to dict (the more common JSON shape)."""
+    if handler.expected_type is not None:
+        return handler.expected_type
+    current = handler.getter(state)
+    if isinstance(current, list):
+        return list
+    return dict
 
 
 # How many times apply_llm_edit will retry after a JSON parse / type
@@ -49,41 +117,24 @@ _LLM_EDIT_MAX_RETRIES = 3
 class JsonEditor(Editor):
     """Editor for ``kind="json"`` targets.
 
-    ``state_attr`` is determined from ``target.path`` — theme and outline
-    are the only json-kind targets in the core pipeline, and they live
-    at well-known state attributes.
+    Path resolution lives in ``_resolve_path`` (module-level). Core
+    paths (theme, outline) live at top-level state attributes;
+    ``("stage_outputs", <stage>, <key>)`` is a generic pattern for
+    extension stages (subtitle, motion_design, render_video, ...) so
+    each extension can edit its own JSON-able output without core
+    having to know the stage name.
     """
 
     kind = "json"
 
-    def _resolve_state_attr(self, target) -> str:
-        path = tuple(target.path)
-        if path not in _PATH_TO_STATE:
-            raise ValueError(
-                f"JsonEditor does not know which state attribute to write for "
-                f"path {path!r}; supported paths: {list(_PATH_TO_STATE.keys())}"
-            )
-        attr, _expected_type = _PATH_TO_STATE[path]
-        return attr
-
     def _parse_and_validate(
-        self, new_value: str, expected_type: type, *, state: Any = None
+        self, new_value: str, expected_type: type
     ) -> Any:
         """Parse ``new_value`` as JSON and assert it matches the expected type.
 
         Empty input is allowed only for list/dict kinds (represents "clear
         this stage" — useful when the user wants to start over without a
         full re-run).
-
-        When ``expected_type is list`` and ``state.outline`` already has
-        entries, additionally enforce per-entry key preservation: every
-        new entry must be a dict whose key set matches the corresponding
-        old entry's key set (ignoring ``_detail_filled`` which the form
-        omits). This is the server-side backstop against UI bugs that
-        would silently drop or rename an outline field. The structured
-        outline editor already enforces this in the form shape, but a
-        defensive check here means a hand-crafted WS payload can't
-        corrupt the schema either.
         """
         text = (new_value or "").strip()
         if not text:
@@ -101,23 +152,27 @@ class JsonEditor(Editor):
                 f"value must be a {expected_type.__name__}, got "
                 f"{type(parsed).__name__}"
             )
-        if expected_type is list:
-            _enforce_outline_entry_keys(parsed, state)
         return parsed
 
     async def apply_direct_edit(
         self, target, new_value, state, config
     ) -> EditResult:
-        attr = self._resolve_state_attr(target)
-        _, expected_type = _PATH_TO_STATE[tuple(target.path)]
         try:
-            parsed = self._parse_and_validate(
-                new_value, expected_type, state=state
-            )
+            handler = _resolve_path(tuple(target.path))
         except ValueError as exc:
             return EditResult(ok=False, error=str(exc))
-        old_value = getattr(state, attr)
-        setattr(state, attr, parsed)
+        expected_type = _infer_expected_type(handler, state)
+        try:
+            parsed = self._parse_and_validate(new_value, expected_type)
+        except ValueError as exc:
+            return EditResult(ok=False, error=str(exc))
+        if handler.is_outline:
+            try:
+                _enforce_outline_entry_keys(parsed, state)
+            except ValueError as exc:
+                return EditResult(ok=False, error=str(exc))
+        old_value = handler.getter(state)
+        handler.setter(state, parsed)
         return EditResult(
             ok=True,
             new_value=json.dumps(parsed, ensure_ascii=False, indent=2),
@@ -128,9 +183,12 @@ class JsonEditor(Editor):
     async def apply_llm_edit(
         self, target, user_message, history, state, config
     ) -> EditResult:
-        attr = self._resolve_state_attr(target)
-        _, expected_type = _PATH_TO_STATE[tuple(target.path)]
-        current_value = target.current_value or json.dumps(getattr(state, attr))
+        try:
+            handler = _resolve_path(tuple(target.path))
+        except ValueError as exc:
+            return EditResult(ok=False, error=str(exc))
+        expected_type = _infer_expected_type(handler, state)
+        current_value = target.current_value or json.dumps(handler.getter(state))
         llm = build_llm_client(config)
         system_prompt = (
             f"You are revising the JSON for the {target.stage!r} stage.\n"
@@ -202,26 +260,30 @@ class JsonEditor(Editor):
                 )
                 continue
 
-            # Per-entry key check (no-op for non-list kinds / empty state).
-            try:
-                _enforce_outline_entry_keys(parsed, state)
-            except ValueError as exc:
-                messages.append({"role": "assistant", "content": resp.content or ""})
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        f"Previous response changed the outline entry keys: "
-                        f"{exc}. Every slide entry must keep the same key set "
-                        f"as the existing outline (only ``_detail_filled`` "
-                        f"may be omitted). Output the JSON again with the "
-                        f"original keys preserved."
-                    ),
-                })
-                last_error = str(exc)
-                continue
+            # Per-entry key check only applies to the real outline path
+            # (handler.is_outline). stage_outputs lists (e.g. subtitle
+            # slides) have their own per-stage shape and must not be
+            # forced through outline's key-preservation rule.
+            if handler.is_outline:
+                try:
+                    _enforce_outline_entry_keys(parsed, state)
+                except ValueError as exc:
+                    messages.append({"role": "assistant", "content": resp.content or ""})
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            f"Previous response changed the outline entry keys: "
+                            f"{exc}. Every slide entry must keep the same key set "
+                            f"as the existing outline (only ``_detail_filled`` "
+                            f"may be omitted). Output the JSON again with the "
+                            f"original keys preserved."
+                        ),
+                    })
+                    last_error = str(exc)
+                    continue
 
-            old_value = getattr(state, attr)
-            setattr(state, attr, parsed)
+            old_value = handler.getter(state)
+            handler.setter(state, parsed)
             # assistant_msg is the chat-visible reply, not the raw JSON.
             # The system prompt forbids prose in the LLM response to
             # keep JSON parsing reliable, so resp.content is the full
