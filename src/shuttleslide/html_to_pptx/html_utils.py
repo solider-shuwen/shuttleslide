@@ -93,6 +93,114 @@ def _extract_attr(tag_str: str, attr_name: str) -> Optional[str]:
     )
 
 
+# Match a single CSS declaration inside a style="..." attribute body.
+# `prop: value;` — captures the property name and value, ignoring the
+# trailing semicolon or end-of-string. Negative lookbehind on `[\w-]`
+# prevents "min-width" from matching a bare "width" search.
+_CSS_DECL_RE = re.compile(
+    r"(?<![\w-])(?P<prop>[\w-]+)\s*:\s*(?P<val>[^;]+?)\s*(?:;|$)",
+)
+
+
+def _parse_img_box_semantics(style_str: Optional[str]) -> dict:
+    """Extract width / height / object-fit from a ``<img>`` style attribute.
+
+    Returns a dict possibly containing keys ``width``, ``height``,
+    ``object_fit``. Values are raw CSS strings (e.g. ``"100%"``, ``"50px"``,
+    ``"cover"``). ``object_fit`` is lower-cased; missing or unrecognized
+    values are dropped (caller defaults to ``"fill"``).
+    """
+    if not style_str:
+        return {}
+    out: dict = {}
+    for m in _CSS_DECL_RE.finditer(style_str):
+        prop = m.group("prop").lower()
+        val = m.group("val").strip()
+        if prop == "width":
+            out["width"] = val
+        elif prop == "height":
+            out["height"] = val
+        elif prop == "object-fit":
+            v = val.lower()
+            if v in {"cover", "contain", "fill", "none", "scale-down"}:
+                out["object_fit"] = v
+    return out
+
+
+# Match the opening <svg ...> tag and capture (head, body, tail) where
+# head includes "<svg", body is the attribute payload, tail is ">".
+_SVG_OPEN_TAG_RE = re.compile(r"(\s*<svg\b)([^>]*)(>)", re.IGNORECASE)
+
+# Matches an existing width=/height= attribute on the SVG root (to strip
+# before re-injecting the <img>-derived value).
+_SVG_DIM_ATTR_RE = re.compile(
+    r"\s+(?:width|height)\s*=\s*(?:\"[^\"]*\"|'[^']*'|[^\s/>]+)",
+    re.IGNORECASE,
+)
+
+
+def _stamp_svg_root_attrs(
+    svg_markup: str,
+    *,
+    width: Optional[str],
+    height: Optional[str],
+    object_fit: str,
+) -> str:
+    """Stamp box-model attributes onto an inlined ``<svg>`` root.
+
+    Called after :func:`inline_svg_placeholders` reads the raw SVG file to
+    carry the placeholder ``<img>``'s CSS box semantics (width / height /
+    object-fit) onto the ``<svg>`` element. Without this, the raw SVG
+    (which typically has only a ``viewBox`` and no explicit width/height)
+    renders at its intrinsic viewBox aspect ratio inside the container,
+    losing the container-fill behavior the slide HTML relied on.
+
+    Behavior:
+
+    * No-op when the ``<img>`` had no relevant CSS (no width, no height,
+      and object-fit at its default ``"fill"``). Keeps the SVG verbatim
+      for older fixtures and consumers that don't style the placeholder.
+    * Otherwise, override any existing ``width`` / ``height`` /
+      ``data-object-fit`` on the root — the ``<img>``'s CSS wins by
+      design, and the data attribute is what extract_layout.js reads
+      (``style.objectFit`` is unreliable on ``<svg>``).
+    * Inject ``preserveAspectRatio`` only when the SVG root does not
+      already declare one (respect author intent for the visual crop).
+      ``cover`` → ``xMidYMid slice``, ``contain`` → ``xMidYMid meet``.
+    """
+    if not width and not height and object_fit == "fill":
+        return svg_markup
+
+    m = _SVG_OPEN_TAG_RE.match(svg_markup)
+    if not m:
+        return svg_markup
+    head, body, tail = m.group(1), m.group(2), m.group(3)
+
+    body = _SVG_DIM_ATTR_RE.sub("", body)
+    body = re.sub(
+        r"\s+data-object-fit\s*=\s*(?:\"[^\"]*\"|'[^']*'|[^\s/>]+)",
+        "",
+        body,
+        flags=re.IGNORECASE,
+    )
+
+    inject: list[str] = []
+    if width:
+        inject.append(f'width="{width}"')
+    if height:
+        inject.append(f'height="{height}"')
+    inject.append(f'data-object-fit="{object_fit}"')
+
+    has_par = re.search(r"\bpreserveAspectRatio\s*=", body, re.IGNORECASE)
+    if not has_par:
+        if object_fit == "cover":
+            inject.append('preserveAspectRatio="xMidYMid slice"')
+        elif object_fit == "contain":
+            inject.append('preserveAspectRatio="xMidYMid meet"')
+
+    return head + body + " " + " ".join(inject) + tail + svg_markup[m.end():]
+
+
 def inline_svg_placeholders(html: str, base_dir: Optional[Path]) -> str:
     """Replace ``<img class="shuttleslide-svg-placeholder" src="...">`` tags
     with the corresponding inline ``<svg>`` markup.
@@ -178,5 +286,20 @@ def inline_svg_placeholders(html: str, base_dir: Optional[Path]) -> str:
                 svg_markup,
                 count=1,
             )
+        # Carry the <img>'s CSS box semantics (width / height / object-fit)
+        # onto the inlined <svg> root. Without this, the raw SVG (typically
+        # viewBox-only) renders at its intrinsic aspect ratio and ignores
+        # the container-fill behavior the slide HTML was relying on — the
+        # resulting PPTX group ends up sized to the viewBox aspect (e.g.
+        # 5in × 2.81in for a 1280×720 viewBox) instead of the container
+        # (e.g. 5in × 13.33in). See _stamp_svg_root_attrs for details.
+        img_style = _extract_attr(tag_str, "style")
+        box = _parse_img_box_semantics(img_style)
+        svg_markup = _stamp_svg_root_attrs(
+            svg_markup,
+            width=box.get("width"),
+            height=box.get("height"),
+            object_fit=box.get("object_fit", "fill"),
+        )
         out = out[: m.start()] + svg_markup + out[m.end() :]
     return out

@@ -54,7 +54,16 @@
         // 提取方向：保留原始 CSS 角度（css_<deg> 协议），让下游
         // `gradient_angle_deg` 用通用公式转换。无显式角度时回退到
         // 命名方向，便于向后兼容。
-        let direction = 'css_90';  // 默认 'to right'
+        //
+        // 默认值必须是 ``css_180``（to bottom）——这是 CSS Images
+        // Module Level 4 规定的 ``linear-gradient()`` 无方向参数时的
+        // 默认方向。Chrome 也据此把 ``linear-gradient(180deg, ...)``
+        // 和 ``linear-gradient(to bottom, ...)`` 都归一化成无方向
+        // 字符串（``linear-gradient(<stops>)``），所以这两种写法都
+        // 会落到这里的 fallback。如果默认值错设为 ``css_90``，所有
+        // 期望自上而下渐变的 fade-in / overlay 都会被错误渲染成
+        // 从左到右。
+        let direction = 'css_180';
         const degMatch = inner.match(/(?:^|,)\s*(-?\d+(?:\.\d+)?)deg\s*,/);
         if (degMatch) {
             direction = 'css_' + parseFloat(degMatch[1]);
@@ -71,14 +80,33 @@
         // 提取颜色 stop + 可选的显式位置（color 后跟 <num>%）。
         // 用全局正则扫描颜色 token，然后对每个匹配查它后面是否紧跟
         // 百分比。所有 stop 都有显式位置时按位置存；否则均匀分布。
-        const colorRegex = /(#(?:[0-9a-fA-F]{3,8})|rgba?\([^)]+\))\s*(\d+(?:\.\d+)?)?%/g;
+        // colorRegex 必须显式匹配 CSS `transparent` 关键字——它既不是
+        // #hex 也不是 rgba()，否则会被静默丢弃，让 fade-in overlay
+        // 丢失顶部透明的 stop（如 slide 1 的 `linear-gradient(180deg,
+        // transparent 0%, #1A6DFF 25%, ...)`）。
+        const colorRegex = /(transparent|#(?:[0-9a-fA-F]{3,8})|rgba?\([^)]+\))\s*(\d+(?:\.\d+)?)?%/g;
         const raw = [];
         let m;
         while ((m = colorRegex.exec(inner)) !== null) {
-            const parsed = parseRgba(m[1]);
+            const literal = m[1];
+            // CSS `transparent` 和 `rgba(0,0,0,0)` 都表示 alpha=0 的黑——
+            // 在 gradient stop 里必须保留为 alpha=0，否则 fade-in overlay
+            // 会从"亮蓝实色"开始，与 HTML 视觉不一致。不复用 parseRgba：
+            // 它对 transparent 返回 null（让 rgbToHex 在 bg-color 提取时
+            // 返回 null，配合 Python 侧 _has_bg_color 的过滤名单），gradient
+            // 路径需要相反行为。
+            let hex, alpha;
+            if (literal === 'transparent' || literal === 'rgba(0, 0, 0, 0)' || literal === 'rgba(0,0,0,0)') {
+                hex = '#000000';
+                alpha = 0.0;
+            } else {
+                const parsed = parseRgba(literal);
+                hex = parsed ? parsed.hex : literal;
+                alpha = parsed ? parsed.alpha : 1.0;
+            }
             raw.push({
-                color: parsed ? parsed.hex : m[1],
-                opacity: parsed ? parsed.alpha : 1.0,
+                color: hex,
+                opacity: alpha,
                 posStr: m[2],  // undefined when no explicit %
             });
         }
@@ -433,7 +461,15 @@
                 filter: style.filter !== 'none' ? style.filter : null,
                 position: style.position,
                 display: style.display,
-                objectFit: style.objectFit,
+                // Computed style.objectFit is the source of truth for HTML
+                // <img>/<video>. For inline <svg> elements it's unreliable
+                // (browsers don't apply object-fit to inline SVG content —
+                // that's preserveAspectRatio's job), so fall back to the
+                // data-object-fit attribute stamped by inline_svg_placeholders
+                // when the SVG came from a shuttleslide-svg-placeholder <img>.
+                objectFit: (style.objectFit && style.objectFit !== 'fill')
+                    ? style.objectFit
+                    : (el.getAttribute('data-object-fit') || 'fill'),
             },
             attrs: {},
             child_count: el.children.length,

@@ -900,10 +900,67 @@ class PPTXRenderer:
         # (1 px = EMU_PER_PX EMU). We compute the affine that maps the
         # SVG's viewBox rectangle onto the target rect in slide-EMU
         # space, then express the translation in SVG pixels.
+        #
+        # object-fit handling mirrors _apply_object_fit_cover / _contain
+        # for raster images:
+        #   * fill (default): stretch the viewBox independently along x
+        #     and y to fill the target rect. Legacy behavior — preserves
+        #     backward compat for SVGs that were authored/cropped to the
+        #     exact target aspect.
+        #   * cover: uniform scale = max(scale_x, scale_y); center the
+        #     over-scaled content so it covers the whole target rect,
+        #     with overflow going past the rect (cropped visually by an
+        #     overlay rectangle above the group, mirroring the source
+        #     HTML's <div style="overflow:hidden">).
+        #   * contain: uniform scale = min(scale_x, scale_y); center the
+        #     under-scaled content, leaving empty bands inside the rect.
         scale_x = (target_w / EMU_PER_PX) / vb_w
         scale_y = (target_h / EMU_PER_PX) / vb_h
         translate_x = target_left / EMU_PER_PX
         translate_y = target_top / EMU_PER_PX
+        # ``group_off_*`` / ``group_ext_*`` describe the SVG's actual
+        # rendered bounding box in slide-EMU coordinates — what the
+        # wrapper ``<p:grpSp>`` advertises as its ``<a:off>/<a:ext>``
+        # for PowerPoint hit-testing and selection. This must reflect
+        # the SVG bbox, NOT the HTML container bbox (``target_*``):
+        #   - cover: rendered > target on one axis, offset < target_left
+        #     (SVG overflows the container on both sides). Using target
+        #     here would make the group selection box smaller than the
+        #     rendered children, so clicking SVG content outside the
+        #     box bypasses the group and selects individual shapes —
+        #     the "SVG looks like a pile of loose parts, not a group"
+        #     bug (slide 1 with landscape SVG in portrait container).
+        #   - contain: rendered < target on one axis, offset > target_left
+        #     (SVG under-fills the container). Using target here makes
+        #     the selection box include empty space around the SVG —
+        #     imprecise but not user-visible; still wrong.
+        #   - fill: rendered == target on both axes (independent stretch).
+        #     Using target here is correct and equals the rendered bbox.
+        group_off_x_emu = target_left
+        group_off_y_emu = target_top
+        group_ext_w_emu = target_w
+        group_ext_h_emu = target_h
+        if elem.object_fit == "cover" or elem.object_fit == "contain":
+            s = max(scale_x, scale_y) if elem.object_fit == "cover" else min(scale_x, scale_y)
+            scale_x = scale_y = s
+            # Re-center the uniformly-scaled SVG inside the target rect.
+            # In EMU: rendered_w = vb_w * s * EMU_PER_PX. Offset so the
+            # visible region is centered (cover: rendered ≥ target on
+            # both axes, offsets ≤ 0; contain: rendered ≤ target,
+            # offsets ≥ 0). Convert back to SVG px for the translate.
+            rendered_w_emu = vb_w * s * EMU_PER_PX
+            rendered_h_emu = vb_h * s * EMU_PER_PX
+            offset_x_emu = target_left + (target_w - rendered_w_emu) / 2
+            offset_y_emu = target_top + (target_h - rendered_h_emu) / 2
+            translate_x = offset_x_emu / EMU_PER_PX
+            translate_y = offset_y_emu / EMU_PER_PX
+            # Overwrite the default (target rect) with the SVG's actual
+            # rendered bbox so the group selection box tracks the SVG,
+            # not the HTML container.
+            group_off_x_emu = int(offset_x_emu)
+            group_off_y_emu = int(offset_y_emu)
+            group_ext_w_emu = int(rendered_w_emu)
+            group_ext_h_emu = int(rendered_h_emu)
 
         # Allocate shape IDs that don't collide with existing shapes on
         # the slide. Vendor library starts its id_counter at 2, but the
@@ -1013,9 +1070,12 @@ class PPTXRenderer:
         # Build the grpSp container. The transform is identity-like:
         # since vendor already emitted each child at absolute slide-EMU
         # coordinates (translate_x/y + scale_x/y folded the SVG viewBox
-        # onto the target rect), set off/ext == chOff/chExt == target
-        # rect so the group transform preserves child positions while
-        # advertising the SVG's bounding box for hit-testing / selection.
+        # onto the target rect), set off/ext == chOff/chExt == SVG's
+        # actual rendered bbox so the group transform preserves child
+        # positions while advertising the SVG's bbox for hit-testing /
+        # selection. For cover this bbox extends past the HTML container
+        # (and possibly past the slide edge — PowerPoint's slide viewport
+        # still clips the visual, the negative off is just for selection).
         grp_name = f"SVGGroup_{elem.slot_id}" if elem.slot_id else f"SVGGroup_{group_id}"
         grp_xml = (
             f'<p:grpSp {nsdecls("p", "a")}>'
@@ -1026,10 +1086,10 @@ class PPTXRenderer:
             f'</p:nvGrpSpPr>'
             f'<p:grpSpPr>'
             f'<a:xfrm>'
-            f'<a:off x="{target_left}" y="{target_top}"/>'
-            f'<a:ext cx="{target_w}" cy="{target_h}"/>'
-            f'<a:chOff x="{target_left}" y="{target_top}"/>'
-            f'<a:chExt cx="{target_w}" cy="{target_h}"/>'
+            f'<a:off x="{group_off_x_emu}" y="{group_off_y_emu}"/>'
+            f'<a:ext cx="{group_ext_w_emu}" cy="{group_ext_h_emu}"/>'
+            f'<a:chOff x="{group_off_x_emu}" y="{group_off_y_emu}"/>'
+            f'<a:chExt cx="{group_ext_w_emu}" cy="{group_ext_h_emu}"/>'
             f'</a:xfrm>'
             f'</p:grpSpPr>'
             f'</p:grpSp>'

@@ -3544,9 +3544,10 @@ class ReviewServer:
         layout data → elements), and merges the per-slide DSLs into one
         presentation using the saved state's theme and canvas dimensions.
 
-        Why not use ``_state_to_presentation`` directly?
-        That helper produces a DSL whose slides carry only ``slots.html``
-        — fine for re-rendering HTML, but PPTXRenderer iterates over
+        ``_state_to_presentation`` is reused for theme extraction (it
+        applies the ``ThemeDef.__dataclass_fields__`` filter so user
+        customizations survive). We do NOT reuse its slides — they carry
+        only ``slots.html``, but PPTXRenderer iterates over
         ``slide.elements`` and would produce an empty PPTX. The transform
         step populates elements from the rendered HTML's layout.
 
@@ -3554,6 +3555,7 @@ class ReviewServer:
         export — typically a crashed run). Other exceptions bubble up to
         the caller (the /api/pptx endpoint) which converts them to 500.
         """
+        from shuttleslide.agent.review.core_stages import _state_to_presentation
         from shuttleslide.agent.review.state_persistence import load_state
         from shuttleslide.html_to_pptx import (
             PresentationDSL,
@@ -3568,11 +3570,9 @@ class ReviewServer:
             )
 
         # Theme: thread through state's saved theme (preserves user
-        # customizations). _state_to_presentation already does this
-        # mapping; reusing its ThemeDef construction keeps the two paths
-        # consistent. Inline import to avoid the orchestrator import
-        # pulling fastapi-free concerns into modules that don't need it.
-        from shuttleslide.agent.orchestrator import _state_to_presentation
+        # customizations). _state_to_presentation does the
+        # ThemeDef(**filtered_dict) construction; reusing it keeps this
+        # path consistent with the HTML-rendering path.
         base_presentation = _state_to_presentation(state)
         theme: ThemeDef = base_presentation.theme
 

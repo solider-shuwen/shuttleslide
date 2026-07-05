@@ -754,17 +754,23 @@ class RenderedStage(StageBase):
 def _state_to_presentation(state: AgentState) -> PresentationDSL:
     """Build a PresentationDSL from the orchestrator state.
 
-    Lifted verbatim from orchestrator.py:_state_to_presentation.
+    Theme is built by filtering ``state.theme`` through
+    ``ThemeDef.__dataclass_fields__`` so any field added to ThemeDef
+    flows through automatically. Slides are passed through verbatim;
+    callers that need ``slide.elements`` populated (e.g. PPTX export)
+    must run the result through ``RuleSlideTransformer`` themselves.
     """
     theme_dict = state.theme or {}
-    theme = ThemeDef(
-        primary_color=theme_dict.get("primary_color", "#133EFF"),
-        accent_color=theme_dict.get("accent_color", "#00CD82"),
-        warn_color=theme_dict.get("warn_color", "#FF5722"),
-        bg_color=theme_dict.get("bg_color", "#FEFEFE"),
-        text_color=theme_dict.get("text_color", "#1F2937"),
-        font_title=theme_dict.get("font_title", "Roboto"),
-        font_body=theme_dict.get("font_body", "Roboto"),
-    )
+    # Filter to ThemeDef's known fields so any new ThemeDef field is picked
+    # up automatically. Same pattern as server._theme_from_snapshot and
+    # transformer.RuleSlideTransformer. A hardcoded whitelist previously
+    # dropped title_color (and any future field), causing presentation.json
+    # to fall back to ThemeDef defaults while the live preview showed the
+    # LLM-set value.
+    known = {
+        k: v for k, v in theme_dict.items()
+        if k in ThemeDef.__dataclass_fields__
+    }
+    theme = ThemeDef(**known)
     slides: List[SlideDSL] = [s for s in state.slides if s is not None]
     return PresentationDSL(theme=theme, slides=slides)

@@ -334,6 +334,11 @@ class SVGElement(SlideElementDSL):
     slot_id: str = ""             # data-slot attribute (debugging)
     viewBox: Optional[str] = None # "0 0 W H" cached
     opacity: float = 1.0          # cumulative ancestor opacity (1.0 = opaque)
+    # object-fit semantics carried over from the originating placeholder
+    # <img> by inline_svg_placeholders → extract_layout.js → _to_svg.
+    # Mirrors ImageElement.object_fit. Renderer picks uniform scale +
+    # center (cover/contain) vs. independent-axis stretch (fill).
+    object_fit: str = "fill"  # 'fill', 'cover', 'contain'
 
 
 # Union of all element types for deserialization

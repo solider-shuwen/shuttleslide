@@ -1583,6 +1583,7 @@ def _to_svg(ce: ClassifiedElement) -> SVGElement:
     """
     elem = ce.data
     attrs = elem.get("attrs", {}) or {}
+    styles = elem.get("styles", {}) or {}
     return SVGElement(
         type="svg",
         svg_markup=attrs.get("svg_markup", "") or "",
@@ -1595,6 +1596,16 @@ def _to_svg(ce: ClassifiedElement) -> SVGElement:
         # library as inherited_styles — multiplying into every fill /
         # stroke alpha.
         opacity=_cumulative_opacity(elem),
+        # object-fit captured by extract_layout.js from the SVG's
+        # data-object-fit attribute (stamped by inline_svg_placeholders
+        # from the originating <img>); mirrors _to_image's reading of
+        # styles.objectFit for raster images. The renderer uses this
+        # to choose uniform scale + center (cover/contain) vs. stretch
+        # (fill). Border / corner_radius are also in styles but are
+        # NOT honored by _render_svg yet — they'd need an overlay
+        # rect on the grpSp wrapper; deferred until a slide actually
+        # uses them on a placeholder <img>.
+        object_fit=styles.get("objectFit", "fill") or "fill",
         position=_pos(elem.get("rect_pct")),
         z_order=ce.index,
     )

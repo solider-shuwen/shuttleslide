@@ -440,6 +440,16 @@ class _ClassificationContext:
 # Public API
 # ---------------------------------------------------------------------------
 
+# Element types whose Python converters actually render the merged
+# inlineRuns (or carry the text directly via directText/step_number).
+# `absorbedByParent` (set by extract_layout.js) is only safe when one
+# of these types sits in the ancestor chain — otherwise the absorbed
+# element's text is silently dropped. Used by `_has_text_rendering_absorber`.
+_TEXT_RENDERING_TYPES: FrozenSet[str] = frozenset({
+    "text_box", "badge", "title_bar", "numbered_step", "icon_text",
+})
+
+
 def classify_elements(
     elements: List[dict],
     tree: ContainmentTree,
@@ -466,6 +476,64 @@ def classify_elements(
         bullet_groups=bullet_groups,
         table_groups=table_groups,
     )
+
+    # Classification is pure (no side effects) but expensive; cache results
+    # so the absorbedByParent geometric scan below doesn't re-run the rule
+    # chain for the same element on every containment check.
+    classification_cache: Dict[int, Optional[str]] = {}
+
+    def _cached_classify(idx: int) -> Optional[str]:
+        if idx not in classification_cache:
+            classification_cache[idx] = _classify_single(elements[idx], idx, ctx)
+        return classification_cache[idx]
+
+    # Tolerance matches build_containment_tree's rect-tie tolerance.
+    # Inherited here so the geometric scan stays consistent with the
+    # tree's containment semantics.
+    _ABS_TOL = 0.5  # pct
+
+    def _has_text_rendering_absorber(child_idx: int) -> bool:
+        """Return True if any geometrically-containing ancestor of
+        ``child_idx`` has ``inlineRuns`` AND is classified as a
+        text-rendering type.
+
+        ``extract_layout.js`` marks an inline descendant as
+        ``absorbedByParent`` whenever ANY ancestor has ``inlineRuns``,
+        on the assumption that the ancestor will render that text. That
+        assumption only holds for ancestors whose Python converter has a
+        text-rendering path (text_box / badge / title_bar /
+        numbered_step / icon_text). When the only absorbing ancestors
+        are non-text-rendering containers — cards render as a frame
+        only; unclassified wrapper divs don't render at all — the
+        absorbed element's text is silently lost. This helper backs the
+        un-absorption decision in the main loop.
+
+        Why a geometric scan instead of ``tree.get_parent`` walks: when
+        a wrapper div and the card inside it share the same bbox (very
+        common — the wrapper exists only to apply outer margins), the
+        containment tree picks one as parent and treats the other as a
+        sibling, so walking ancestors can miss the card.
+        """
+        rect_i = elements[child_idx].get("rect_pct", {})
+        if not rect_i:
+            return False
+        ix1 = rect_i.get("x", 0)
+        iy1 = rect_i.get("y", 0)
+        ix2 = ix1 + rect_i.get("w", 0)
+        iy2 = iy1 + rect_i.get("h", 0)
+        for j, other in enumerate(elements):
+            if j == child_idx or not other.get("inlineRuns"):
+                continue
+            rect_j = other.get("rect_pct", {})
+            jx1 = rect_j.get("x", 0)
+            jy1 = rect_j.get("y", 0)
+            jx2 = jx1 + rect_j.get("w", 0)
+            jy2 = jy1 + rect_j.get("h", 0)
+            if (ix1 >= jx1 - _ABS_TOL and iy1 >= jy1 - _ABS_TOL
+                    and ix2 <= jx2 + _ABS_TOL and iy2 <= jy2 + _ABS_TOL):
+                if _cached_classify(j) in _TEXT_RENDERING_TYPES:
+                    return True
+        return False
 
     # Collect indices absorbed by containers (cards, badges)
     absorbed_indices: Set[int] = set()
@@ -515,7 +583,7 @@ def classify_elements(
         parent = tree.get_parent(i)
         if parent is not None:
             parent_elem = elements[parent]
-            parent_type = _classify_single(parent_elem, parent, ctx)
+            parent_type = _cached_classify(parent)
             if parent_type in ("badge", "title_bar", "numbered_step"):
                 absorbed_indices.add(i)
             elif parent_type == "icon_text":
@@ -534,8 +602,15 @@ def classify_elements(
             continue
 
         # JS marks inline-only descendants (span, strong, etc., merged into
-        # parent's inlineRuns) so they don't double-render.
-        if elem.get("absorbedByParent"):
+        # parent's inlineRuns) so they don't double-render. The merge is
+        # only correct when an ancestor actually renders inlineRuns as
+        # text. Cards (and unclassified wrappers around them) absorb
+        # their inline descendants but have no text-rendering path —
+        # honouring the flag there silently drops the text. Verify a
+        # text-rendering absorber exists; otherwise fall through and
+        # classify the element (typically as text_box) so it renders on
+        # top of the card frame, matching the card-frame contract.
+        if elem.get("absorbedByParent") and _has_text_rendering_absorber(i):
             continue
 
         # Table cells are absorbed into their TableElement — don't emit them.
