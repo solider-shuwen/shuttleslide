@@ -65,6 +65,16 @@ class BrowserManager:
         )
         return page
 
+    async def new_cdp_session(self, page: Page):
+        """Open a CDP session on ``page`` for direct protocol commands.
+
+        Thin wrapper around ``page.context.new_cdp_session`` — exposed
+        so html_direct's cdp_capture can issue raw commands like
+        ``Page.captureScreenshot`` without reaching into Playwright
+        internals. Caller owns the session's lifecycle.
+        """
+        return await page.context.new_cdp_session(page)
+
     async def new_context(
         self,
         locale: Optional[str] = None,

@@ -76,7 +76,7 @@ def _resolve_output_path(output: Optional[str], input_path: Path, suffix: str) -
 
 
 @click.group()
-@click.version_option(version="0.1.0")
+@click.version_option(version="0.1.1")
 def main():
     """
     Shuttleslide - Bidirectional PPTX ↔ HTML conversion library.
@@ -357,7 +357,7 @@ def info():
     """
     Show information about the Shuttleslide project.
     """
-    click.echo("Shuttleslide v0.1.0")
+    click.echo("Shuttleslide v0.1.1")
     click.echo("")
     click.echo("Bidirectional PPTX ↔ HTML conversion library")
     click.echo("with round-trip format preservation.")
@@ -619,10 +619,7 @@ def warm_cache(force: bool, include_google_fonts: bool):
                    "picker (16:9 / 9:16 / 1:1 / 3:4 / custom W:H). The "
                    "chosen ratio threads through AgentConfig.canvas_*_emu "
                    "and the review UI renders thumbnails + preview at the "
-                   "true aspect ratio instead of the 16:9 default. Pro's "
-                   "canvas house_rules provider (registered via the "
-                   "shuttleslide.review.house_rules entry-point group) "
-                   "swaps in canvas-specific prompts when this flag is on.")
+                   "true aspect ratio instead of the 16:9 default.")
 def review(
     host: str,
     port: int,

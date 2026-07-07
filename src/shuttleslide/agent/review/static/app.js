@@ -688,6 +688,21 @@ function buildThumbItems(snap) {
              </div>`,
     }));
   }
+  if (stage === "motion_design") {
+    // Extension stage (shuttleslide-pro). Per-slide live WAAE preview.
+    // The snapshot's state_view.motion_design.spec.slides carries one
+    // entry per slide; mirror the slides/subtitle iframe thumbnail
+    // pattern so the user picks a slide on the left and the renderer
+    // focuses the matching preview iframe on the right (via
+    // container.dataset.idx, see ext.js renderMotionDesign).
+    const slides = ((view.motion_design || {}).spec || {}).slides || [];
+    return slides.map((sl, i) => ({
+      html: `<div class="thumb-label">Slide ${i + 1}</div>
+             <div class="thumb-slide">
+               <iframe src="/artifact/slides/${i}${thumbBust}" scrolling="no"></iframe>
+             </div>`,
+    }));
+  }
   return [];
 }
 

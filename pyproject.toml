@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "shuttleslide"
-version = "0.1.0"
+version = "0.1.1"
 description = "Bidirectional PPTX ↔ HTML conversion with round-trip format preservation, plus an optional AI slide-generation pipeline"
 readme = "README.md"
 requires-python = ">=3.9"
