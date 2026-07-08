@@ -783,9 +783,11 @@ class InteractiveOrchestrator(AgentOrchestrator):
 
         # No-op detection: if the editor reports the value didn't change
         # (post-edit value identical to the pre-edit current_value), skip
-        # the undo push, state save, snapshot re-broadcast, AND signal the
-        # server to skip the EditAppliedMsg ack. The History panel stays
-        # clean and the client closes its edit toolbar locally.
+        # the undo push, state save, snapshot re-broadcast, AND mark the
+        # result so the server sends a no_op EditAppliedMsg ack (rather
+        # than the default ack). The History panel stays clean; the
+        # client clears any pending indicator without flipping the
+        # "edited" flag.
         if (
             result.new_value is not None
             and old_value is not None
@@ -812,6 +814,13 @@ class InteractiveOrchestrator(AgentOrchestrator):
         # the live render cascade in _refresh_after_edit handles those.
         marks_changed = _propagate_stale_for_target(target, state, pre_edit_value)
         self._save_state(state)
+        # Give the owning stage a chance to regenerate derived artifacts
+        # (preview HTML files, cached renders, ...) BEFORE the snapshot
+        # is rebuilt and re-emitted — otherwise the UI would re-render
+        # with stale on-disk files. Errors here are non-fatal: the edit
+        # itself has already succeeded + persisted, so we surface a
+        # broadcaster warning instead of failing the apply_edit call.
+        await self._invoke_post_edit_refresh(target, state)
         await self._refresh_after_edit(target.stage, state)
         await self._broadcast_history()
         if marks_changed:
@@ -1799,6 +1808,49 @@ class InteractiveOrchestrator(AgentOrchestrator):
             save_state(state, self._state_cache_path)
         except Exception as exc:  # pragma: no cover - defensive
             state.add_warning(f"state save failed: {exc}")
+
+    async def _invoke_post_edit_refresh(
+        self, target: EditTarget, state: AgentState
+    ) -> None:
+        """Call ``stage.post_edit_refresh`` for the target's owning stage.
+
+        Generic extension point: stages that maintain on-disk artifacts
+        derived from ``state`` (preview HTML files, cached renders, ...)
+        override ``post_edit_refresh`` to regenerate them after a
+        successful edit. Best-effort — failures surface as broadcaster
+        warnings rather than failing the edit, since the edit itself
+        has already been persisted by the time this runs.
+        """
+        stage_obj = None
+        for s in self._stages:
+            if getattr(s, "name", None) == target.stage:
+                stage_obj = s
+                break
+        if stage_obj is None:
+            return
+        hook = getattr(stage_obj, "post_edit_refresh", None)
+        if hook is None:
+            return
+        try:
+            ctx = self._build_stage_context(state)
+        except Exception as exc:  # pragma: no cover - defensive
+            if self.broadcaster is not None:
+                self.broadcaster.emit_error(
+                    f"post_edit_refresh: failed to build stage context for "
+                    f"{target.stage!r}: {exc}",
+                    fatal=False,
+                )
+            return
+        try:
+            await hook(ctx, state, target)
+        except Exception as exc:
+            # Best-effort: log + broadcast but don't fail the edit.
+            if self.broadcaster is not None:
+                self.broadcaster.emit_error(
+                    f"post_edit_refresh for {target.stage!r} failed: {exc} "
+                    f"(edit was applied; derived artifacts may be stale)",
+                    fatal=False,
+                )
 
     async def _broadcast_history(self) -> None:
         """Push a fresh ``HistorySnapshotMsg`` to every connected client.

@@ -30,14 +30,24 @@ external-orchestrator mode" instead.
 
 from __future__ import annotations
 
+import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from importlib.metadata import entry_points
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from shuttleslide.agent.config import AgentConfig
     from shuttleslide.agent.review.review_gate import EditTarget
     from shuttleslide.agent.state import AgentState
+
+
+# Public, stable entry-point group name. External packages (e.g.
+# shuttleslide-pro's MotionChatEditor) register additional Editor
+# subclasses here; default_editors() discovers and loads them after the
+# 4 built-ins. Mirrors shuttleslide.cli_commands / shuttleslide.review.*
+# extension groups — see CLAUDE.md "Extension mechanism".
+EDITOR_ENTRY_POINT_GROUP = "shuttleslide.review.editors"
 
 
 @dataclass
@@ -54,8 +64,10 @@ class EditResult:
       * ``diff`` is an optional unified diff for chat display.
       * ``no_op`` signals that ``new_value`` equalled the live value
         when apply_edit ran, so no UndoStack entry was pushed and no
-        stage_complete re-broadcast is warranted. The server uses this
-        to skip the EditAppliedMsg ack entirely (silent skip).
+        stage_complete re-broadcast is warranted. The server sends an
+        ``EditAppliedMsg`` with ``no_op=True`` (rather than silently
+        skipping) so clients can clear any pending chat indicator
+        without flipping the "edited" flag.
 
     On failure (``ok=False``):
       * ``error`` is a user-facing error message (English prose; no
@@ -212,6 +224,102 @@ class EditorRegistry:
         return sorted(self._editors.keys())
 
 
+def _iter_editor_entry_points():
+    """Yield entry points in the ``shuttleslide.review.editors`` group.
+
+    Wrapper around ``importlib.metadata.entry_points`` so tests can
+    monkeypatch one place. Same shape as
+    :func:`shuttleslide.extensions.cli_registry.iter_extension_entry_points`.
+    """
+    try:
+        # Python 3.10+ returns a SelectableGroups; entry_points(group=...)
+        # is the stable selector across 3.9–3.12.
+        return entry_points(group=EDITOR_ENTRY_POINT_GROUP)
+    except TypeError:  # pragma: no cover — very old Python shape
+        return entry_points().get(EDITOR_ENTRY_POINT_GROUP, [])
+
+
+def _register_extension_editors(registry: EditorRegistry) -> None:
+    """Discover and register Editor subclasses from external packages.
+
+    Iterates ``shuttleslide.review.editors`` entry points. Each entry
+    point may resolve to either:
+
+    * an ``Editor`` subclass — instantiated with no args, then registered
+    * an ``Editor`` instance — registered directly (lets extensions
+      inject config / collaborators at construction time)
+
+    Failure isolation mirrors :func:`shuttleslide.extensions.cli_registry.register_extensions`:
+
+    * Entry point fails to load → log to stderr, continue.
+    * Loaded value is not a class/instance of ``Editor`` → log, skip.
+    * Extension's ``kind`` collides with a built-in (or previously
+      registered extension) → log, skip. Built-ins always win; first
+      extension to claim a kind wins over later ones.
+
+    No-op when no extensions are registered (vanilla installs).
+    """
+    import inspect
+
+    for ep in _iter_editor_entry_points():
+        try:
+            loaded = ep.load()
+        except Exception as exc:  # noqa: BLE001 — extension isolation
+            print(
+                f"[shuttleslide] failed to load editor extension "
+                f"'{ep.name}' from {ep.value}: {exc}",
+                file=sys.stderr,
+            )
+            continue
+
+        # Accept class or instance. Class → instantiate; instance → use as-is.
+        if inspect.isclass(loaded):
+            if not issubclass(loaded, Editor):
+                print(
+                    f"[shuttleslide] editor extension '{ep.name}' class "
+                    f"{loaded!r} is not an Editor subclass; skipping.",
+                    file=sys.stderr,
+                )
+                continue
+            try:
+                editor = loaded()
+            except Exception as exc:  # noqa: BLE001 — extension isolation
+                print(
+                    f"[shuttleslide] editor extension '{ep.name}' failed "
+                    f"to instantiate: {exc}",
+                    file=sys.stderr,
+                )
+                continue
+        elif isinstance(loaded, Editor):
+            editor = loaded
+        else:
+            print(
+                f"[shuttleslide] editor extension '{ep.name}' loaded "
+                f"{loaded!r} which is neither an Editor class nor "
+                f"instance; skipping.",
+                file=sys.stderr,
+            )
+            continue
+
+        if editor.kind in registry._editors:  # type: ignore[attr-defined]
+            print(
+                f"[shuttleslide] editor extension '{ep.name}' kind "
+                f"{editor.kind!r} already registered; skipping.",
+                file=sys.stderr,
+            )
+            continue
+
+        try:
+            registry.register(editor)
+        except ValueError as exc:  # paranoia — race-free recheck above
+            print(
+                f"[shuttleslide] editor extension '{ep.name}' register "
+                f"failed: {exc}",
+                file=sys.stderr,
+            )
+            continue
+
+
 def default_editors() -> EditorRegistry:
     """Return a fresh registry pre-populated with the 4 built-in editors.
 
@@ -220,6 +328,12 @@ def default_editors() -> EditorRegistry:
     Lazy imports keep ``editors/__init__`` importable without Pillow /
     python-multipart installed — JsonEditor / SvgEditor / SlideEditor
     only need the core deps; ImageUploader pulls in Pillow.
+
+    After the built-ins are registered, ``shuttleslide.review.editors``
+    entry points are discovered and registered — external packages
+    (e.g. ``shuttleslide-pro``'s ``MotionChatEditor``) plug in here.
+    Built-in kinds always win; an extension that re-declares ``"json"``
+    is skipped. See CLAUDE.md "Extension mechanism".
     """
     from shuttleslide.agent.review.editors.image_uploader import ImageUploader
     from shuttleslide.agent.review.editors.json_editor import JsonEditor
@@ -231,4 +345,5 @@ def default_editors() -> EditorRegistry:
     registry.register(SvgEditor())
     registry.register(SlideEditor())
     registry.register(ImageUploader())
+    _register_extension_editors(registry)
     return registry

@@ -55,11 +55,16 @@ class EditTarget:
     address nested structures (e.g. ``("slide", 3, "slot", "hero")`` for
     slide 3's hero slot). ``kind`` is the dispatch key for the editor
     registry in PR3.
+
+    The ``kind`` Literal lists the core built-ins plus ``"motion_chat"``
+    (shuttleslide-pro). Extension packages can register further kinds via
+    the ``shuttleslide.review.editors`` entry-point group; the Literal is
+    a documentation convenience, not a runtime-enforced allowlist.
     """
 
     stage: StageName
     path: tuple
-    kind: Literal["json", "html", "svg", "image"]
+    kind: Literal["json", "html", "svg", "image", "motion_chat"]
     current_value: str
     meta: Dict[str, Any] = field(default_factory=dict)
 

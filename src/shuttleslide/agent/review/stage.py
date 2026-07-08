@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from shuttleslide.agent.state import AgentState
     from shuttleslide.agent.tools.registry import ToolRegistry
     from shuttleslide.agent.orchestrator import OrchestratorResult
+    from shuttleslide.agent.review.review_gate import EditTarget
 
 
 ArtifactKind = Literal["json", "html", "svg", "image", "mixed", "audio"]
@@ -194,3 +195,25 @@ class StageBase:
         raise NotImplementedError(
             f"{type(self).__name__} does not support per-item regenerate"
         )
+
+    async def post_edit_refresh(
+        self,
+        ctx: StageContext,
+        state: "AgentState",
+        target: "EditTarget",
+    ) -> None:
+        """Hook fired by the review orchestrator after a successful
+        ``apply_edit`` on a target in this stage.
+
+        Default no-op. Override to regenerate derived artifacts that
+        live outside ``state`` (e.g. preview HTML files, rendered
+        thumbnails, downstream cached bundles) when the edited value
+        changes. Called AFTER state is persisted and BEFORE the
+        snapshot is rebuilt + re-emitted, so any ``state`` mutation
+        performed here is visible in the broadcast snapshot.
+
+        Errors raised here surface as a non-fatal warning in the
+        broadcaster (the edit itself has already succeeded and been
+        persisted) — implementations should keep this best-effort.
+        """
+        return None

@@ -48,6 +48,9 @@ class _PathHandler:
 # ``("stage_outputs", stage_name, key)`` is a generic pattern so any
 # extension stage (subtitle, motion_design, render_video, ...) can edit
 # its own JSON-able output without core having to know the stage name.
+# The optional 4th+ segments descend into nested dict/list values:
+# ``("stage_outputs", "motion_design", "spec", "slides", idx)`` replaces
+# only ``state.stage_outputs["motion_design"]["spec"]["slides"][idx]``.
 def _resolve_path(path: tuple) -> _PathHandler:
     if path == ("theme",):
         return _PathHandler(
@@ -62,13 +65,70 @@ def _resolve_path(path: tuple) -> _PathHandler:
             setter=lambda s, v: setattr(s, "outline", v),
             is_outline=True,
         )
-    if len(path) == 3 and path[0] == "stage_outputs":
+    if len(path) >= 3 and path[0] == "stage_outputs":
         stage_name, key = path[1], path[2]
+        subpath = path[3:]
+
+        def _descend(cur: Any, segments: tuple, *, for_set: bool):
+            """Walk ``segments`` into ``cur``. ``for_set`` controls the
+            last-segment behavior: getter stops at the last full path
+            (returns None if any segment is missing); setter walks to the
+            parent and returns ``(parent, last_segment)`` so the caller
+            can write. Raises ValueError on type mismatches so the
+            editor returns a clean error instead of crashing."""
+            if not for_set:
+                # Getter path — read-only traversal.
+                node = cur
+                for seg in segments:
+                    if isinstance(seg, int):
+                        if not isinstance(node, list) or not (0 <= seg < len(node)):
+                            return None
+                        node = node[seg]
+                    else:
+                        if not isinstance(node, dict) or seg not in node:
+                            return None
+                        node = node[seg]
+                return node
+            # Setter path — walk to parent, return (parent, last_key).
+            if not segments:
+                # Should not happen (caller handles whole-value set
+                # separately) but be defensive.
+                raise ValueError("empty subpath for nested set")
+            parent = cur
+            for seg in segments[:-1]:
+                if isinstance(seg, int):
+                    if not isinstance(parent, list) or not (0 <= seg < len(parent)):
+                        raise ValueError(
+                            f"cannot descend at index {seg}: container is not a list "
+                            f"or index out of range"
+                        )
+                    parent = parent[seg]
+                else:
+                    if not isinstance(parent, dict) or seg not in parent:
+                        raise ValueError(
+                            f"cannot descend at key {seg!r}: missing from dict"
+                        )
+                    parent = parent[seg]
+            last = segments[-1]
+            if isinstance(last, int):
+                if not isinstance(parent, list) or not (0 <= last < len(parent)):
+                    raise ValueError(
+                        f"list index {last} out of range or container is not a list"
+                    )
+            else:
+                if not isinstance(parent, dict):
+                    raise ValueError(
+                        f"cannot set key {last!r}: container is not a dict"
+                    )
+            return parent, last
 
         def _get(s: Any) -> Any:
             so = getattr(s, "stage_outputs", None) or {}
             sd = so.get(stage_name) or {}
-            return sd.get(key)
+            cur = sd.get(key) if isinstance(sd, dict) else None
+            if not subpath:
+                return cur
+            return _descend(cur, subpath, for_set=False)
 
         def _set(s: Any, v: Any) -> None:
             so = getattr(s, "stage_outputs", None)
@@ -79,7 +139,25 @@ def _resolve_path(path: tuple) -> _PathHandler:
             if not isinstance(sd, dict):
                 sd = {}
                 so[stage_name] = sd
-            sd[key] = v
+            if not subpath:
+                # Whole-value replace (original 3-segment path).
+                sd[key] = v
+                return
+            cur = sd.get(key)
+            # Container at ``key`` must already exist for nested set —
+            # we don't synthesise intermediate structures. JsonEditor
+            # callers should rebuild the whole value if the container
+            # itself is missing (use the 3-segment form instead).
+            if cur is None:
+                raise ValueError(
+                    f"cannot descend into stage_outputs[{stage_name!r}][{key!r}]: "
+                    f"value is missing — edit the parent value instead"
+                )
+            parent, last = _descend(cur, subpath, for_set=True)
+            if isinstance(last, int):
+                parent[last] = v
+            else:
+                parent[last] = v
 
         # Defer type inference to apply time (see _infer_type below) — the
         # expected type depends on the live value, which isn't known here.
@@ -88,7 +166,7 @@ def _resolve_path(path: tuple) -> _PathHandler:
     raise ValueError(
         f"JsonEditor does not know which state attribute to write for "
         f"path {tuple(path)!r}; supported patterns: ('theme',), "
-        f"('outline',), ('stage_outputs', <stage>, <key>)"
+        f"('outline',), ('stage_outputs', <stage>, <key>[, <sub>, ...])"
     )
 
 
@@ -172,7 +250,14 @@ class JsonEditor(Editor):
             except ValueError as exc:
                 return EditResult(ok=False, error=str(exc))
         old_value = handler.getter(state)
-        handler.setter(state, parsed)
+        try:
+            handler.setter(state, parsed)
+        except ValueError as exc:
+            # Deep stage_outputs paths validate at set time (list index
+            # out of range, missing intermediate container, type
+            # mismatch on a nested descent). Surface the error to the
+            # caller instead of crashing.
+            return EditResult(ok=False, error=str(exc))
         return EditResult(
             ok=True,
             new_value=json.dumps(parsed, ensure_ascii=False, indent=2),
@@ -216,7 +301,7 @@ class JsonEditor(Editor):
                     messages=messages,
                     tools=None,
                     temperature=max(0.0, min(1.0, config.temperature)),
-                    max_tokens=config.max_tokens or 4096,
+                    max_tokens=config.max_tokens,
                 )
             except Exception as exc:
                 return EditResult(ok=False, error=f"LLM call failed: {exc}")
@@ -283,7 +368,11 @@ class JsonEditor(Editor):
                     continue
 
             old_value = handler.getter(state)
-            handler.setter(state, parsed)
+            try:
+                handler.setter(state, parsed)
+            except ValueError as exc:
+                # Deep path validation failure — see apply_direct_edit.
+                return EditResult(ok=False, error=str(exc))
             # assistant_msg is the chat-visible reply, not the raw JSON.
             # The system prompt forbids prose in the LLM response to
             # keep JSON parsing reliable, so resp.content is the full

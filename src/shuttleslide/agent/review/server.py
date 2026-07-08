@@ -2094,10 +2094,23 @@ class ReviewServer:
             return
         result = await orch.apply_edit(target, mode, payload)
         if result.no_op:
-            # Silent skip: editor reported new_value == current_value, so
-            # the orchestrator pushed no undo entry and broadcast no
-            # stage_complete. Withhold the EditAppliedMsg too — client
-            # closes its edit toolbar locally and history stays clean.
+            # Editor reported new_value == current_value: no undo entry
+            # pushed, no stage_complete broadcast. But the client may have
+            # a pending "正在生成回复…" indicator (LLM mode) or open edit
+            # toolbar (direct mode) waiting for an ack — silent skip
+            # leaves those hanging. Send an explicit no_op ack so the
+            # client clears local UI state without flipping the "edited"
+            # flag (no actual change happened).
+            await self._send(
+                ws,
+                EditAppliedMsg(
+                    ref_id=ref_id,
+                    target_path=list(target.path),
+                    new_preview=result.new_value or "",
+                    diff=None,
+                    no_op=True,
+                ),
+            )
             return
         if result.ok:
             await self._send(
@@ -2162,6 +2175,24 @@ class ReviewServer:
             )
             return
         if result.no_op:
+            # LLM-mode no-op: tool-call loop ran but produced no change.
+            # The orchestrator already broadcast chat_history with the
+            # assistant_msg ("No change applied — the model finished
+            # without editing..."), so the reply is visible — but the
+            # client's "正在生成回复…" pending indicator is waiting on
+            # exactly one of edit_applied/edit_rejected/edit_cancelled.
+            # Silent skip leaves it stuck. Send a no_op ack so the
+            # frontend clears pending without flipping the edited flag.
+            await self._send(
+                ws,
+                EditAppliedMsg(
+                    ref_id=ref_id,
+                    target_path=list(target.path),
+                    new_preview=result.new_value or "",
+                    diff=None,
+                    no_op=True,
+                ),
+            )
             return
         if result.ok:
             await self._send(
@@ -2216,6 +2247,20 @@ class ReviewServer:
             )
             return
         if result.no_op:
+            # Structural-op no-op (e.g. LLM add_slide bailed without
+            # producing a slide). Same pattern as the LLM edit no_op
+            # branch above — send an explicit ack so any client-side
+            # pending indicator clears, without flipping the edited flag.
+            await self._send(
+                ws,
+                EditAppliedMsg(
+                    ref_id=ref_id,
+                    target_path=list(target_path_for_ack),
+                    new_preview=result.new_value or "",
+                    diff=None,
+                    no_op=True,
+                ),
+            )
             return
         if result.ok:
             await self._send(

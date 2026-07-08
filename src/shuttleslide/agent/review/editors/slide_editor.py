@@ -215,7 +215,7 @@ class SlideEditor(Editor):
                     messages=messages,
                     tools=[tool_schema, reject_schema],
                     temperature=max(0.0, min(1.0, config.temperature)),
-                    max_tokens=config.max_tokens or 4096,
+                    max_tokens=config.max_tokens,
                     tool_choice="required",
                 )
             except Exception as exc:

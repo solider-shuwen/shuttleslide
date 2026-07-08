@@ -476,7 +476,7 @@ window.addEventListener('resize', scaleBigSlide);
 
 // Ctrl/Cmd+wheel zoom on the preview pane — Figma-style: mouse anchor stays.
 // Only fires when the cursor is over a .big-slide-wrapper, so non-wrapper
-// stages (motion_design, render_video, voiceover) keep browser-default wheel.
+// stages (render_video, voiceover) keep browser-default wheel.
 (function () {
   const pcEl = document.getElementById('preview-content');
   if (!pcEl) return;
@@ -1019,6 +1019,12 @@ function targetLabel(target) {
   const meta = target.meta || {};
   if (meta.slide_idx != null && meta.slot_id) {
     return `slide ${Number(meta.slide_idx) + 1} · ${meta.slot_id}`;
+  }
+  // Per-slide JSON targets that have no slot_id (e.g. motion_design's
+  // spec.slides[idx]) — show "StageLabel · slide N" rather than the raw
+  // path tail (which would render as the integer idx, e.g. "Motion · 3").
+  if (meta.slide_idx != null && target.stage) {
+    return `${stageLabel(target.stage)} · slide ${Number(meta.slide_idx) + 1}`;
   }
   // Stage-level JSON targets (motion_design spec, script slides) carry
   // no slide/slot meta and would otherwise render as a raw dotted state
@@ -4156,6 +4162,8 @@ ws.onmessage = (event) => {
     case "edit_applied": {
       // Remove the local "正在生成回复…" marker now that the real
       // response (applied/rejected/etc.) is being appended below.
+      // Runs even for no_op acks — the whole point of sending the
+      // ack is to clear this indicator without flipping state.
       if (msg.ref_id) clearPendingAssistant(msg.ref_id);
       // Add-slide modal ack: close the modal if its ref_id matches.
       if (msg.ref_id && typeof handleAddSlideAck === "function") {
@@ -4168,6 +4176,13 @@ ws.onmessage = (event) => {
       if (msg.ref_id && pendingDrops.has(msg.ref_id)) {
         _finalizeDrop(msg.ref_id, msg.new_preview || "", msg.width, msg.height);
       }
+      // no_op acks (editor returned new_value == old_value) must NOT
+      // append an "applied" entry or flip the edited flag — no actual
+      // change happened. The assistant_msg from chat_history already
+      // explained "No change applied — ..."; the chat undo button
+      // stays disabled. clearPendingAssistant above is the only
+      // required side effect.
+      const isNoOp = msg.no_op === true;
       // Append an "applied" entry carrying the unified diff so the
       // user can see exactly what changed. The sidebar History panel
       // only carries action_label + new_value_summary (short prose)
@@ -4180,25 +4195,35 @@ ws.onmessage = (event) => {
       // conversation context is what matters for future LLM turns,
       // not the diff. Re-runs and screenshots are the durable record.
       const path = msg.target_path || [];
-      if (msg.diff) {
+      if (msg.diff && !isNoOp) {
         appendChatEntry(path, "applied", "Applied", { diff: msg.diff });
       }
       // Image upload acks carry the description that landed in state
       // (user-supplied or VLM-generated). Diff is None for image
       // uploads, so without this branch the upload would be silent —
       // particularly bad in the VLM case where the user wants to
-      // sanity-check the auto-generated caption.
-      if (msg.description !== null && msg.description !== undefined) {
+      // sanity-check the auto-generated caption. (no_op acks never
+      // carry descriptions — image uploads don't go through the
+      // no_op path.)
+      if (
+        !isNoOp &&
+        msg.description !== null &&
+        msg.description !== undefined
+      ) {
         const label = msg.description
           ? `Description: "${msg.description}"`
           : "Uploaded (no description — VLM unavailable or disabled)";
         appendChatEntry(path, "applied", label);
       }
-      setChatEditedFlag(path, true);
+      if (!isNoOp) {
+        setChatEditedFlag(path, true);
+      }
       setChatError("");
       // LLM edits flip the global lock on send; release it now that
       // the edit resolved. No-op for direct/image edits (lock was
-      // never set). Safe to call unconditionally.
+      // never set). Safe to call unconditionally — also covers the
+      // no_op case, where the lock was flipped on send and needs to
+      // release even though no edit landed.
       if (msg.ref_id && msg.ref_id === activeEditRefId) {
         clearEditInProgress();
       }

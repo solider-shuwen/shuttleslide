@@ -70,6 +70,13 @@ class EditAppliedMsg:
     ``description`` is populated only for image uploads — the actual
     description string written to state (user-supplied or VLM-generated).
     Lets the client surface "what landed" without refetching the snapshot.
+
+    ``no_op=True`` signals the editor returned ``new_value == old_value``,
+    so no undo entry was pushed and no snapshot re-broadcast is warranted.
+    Clients MUST still clear any pending chat indicator (the LLM-mode
+    flow sets one on send) but MUST NOT flip the "edited" flag, append
+    an "applied" chat entry, or treat this as a state change. ``diff``
+    is always ``None`` for no_op acks.
     """
 
     type: Literal["edit_applied"] = "edit_applied"
@@ -80,6 +87,7 @@ class EditAppliedMsg:
     width: Optional[int] = None
     height: Optional[int] = None
     description: Optional[str] = None
+    no_op: bool = False
 
 
 @dataclass
