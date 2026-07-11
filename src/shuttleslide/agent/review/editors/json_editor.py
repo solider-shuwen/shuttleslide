@@ -171,14 +171,29 @@ def _resolve_path(path: tuple) -> _PathHandler:
 
 
 def _infer_expected_type(handler: _PathHandler, state: Any) -> type:
-    """For paths whose expected_type is None (stage_outputs), infer from
-    the current value. List stays list, dict stays dict, missing or
-    scalar defaults to dict (the more common JSON shape)."""
+    """For paths whose expected_type is None (stage_outputs leaves), infer
+    from the current value.
+
+    bool must be checked before int (``isinstance(True, int)`` is True).
+    Missing keys (``None``) and unknown shapes default to dict — the
+    more common JSON shape at ``stage_outputs[...][...]`` leaves, and
+    the only shape that supports key-by-key incremental growth.
+    """
     if handler.expected_type is not None:
         return handler.expected_type
     current = handler.getter(state)
+    if isinstance(current, bool):
+        return bool
+    if isinstance(current, str):
+        return str
     if isinstance(current, list):
         return list
+    if isinstance(current, dict):
+        return dict
+    if isinstance(current, int):
+        return int
+    if isinstance(current, float):
+        return float
     return dict
 
 
@@ -210,9 +225,10 @@ class JsonEditor(Editor):
     ) -> Any:
         """Parse ``new_value`` as JSON and assert it matches the expected type.
 
-        Empty input is allowed only for list/dict kinds (represents "clear
-        this stage" — useful when the user wants to start over without a
-        full re-run).
+        Empty input is allowed for list/dict (represents "clear this
+        stage" — useful when the user wants to start over without a full
+        re-run) and for str (clears a scalar leaf like
+        ``last_scripts[str(N)]``). int/float/bool leaves reject empty.
         """
         text = (new_value or "").strip()
         if not text:
@@ -220,6 +236,8 @@ class JsonEditor(Editor):
                 return {}
             if expected_type is list:
                 return []
+            if expected_type is str:
+                return ""
             raise ValueError("value is empty")
         try:
             parsed = json.loads(text)

@@ -688,6 +688,31 @@ function buildThumbItems(snap) {
              </div>`,
     }));
   }
+  if (stage === "script") {
+    // Extension stage (shuttleslide-pro). Per-slide script editor — same
+    // iframe-thumbnail pattern as subtitle. state_view.slides carries
+    // {index, title, script} per slide; the slide render is the visual
+    // anchor for picking which script to edit.
+    const slides = view.slides || [];
+    return slides.map((sl, i) => ({
+      html: `<div class="thumb-label">Slide ${i + 1}</div>
+             <div class="thumb-slide">
+               <iframe src="/artifact/slides/${i}${thumbBust}" scrolling="no"></iframe>
+             </div>`,
+    }));
+  }
+  if (stage === "voiceover") {
+    // Extension stage (shuttleslide-pro). Per-slide script + audio editor.
+    // slide_count (or audio_paths length) drives the thumbnail count;
+    // audio has no still preview, so the slide render is the visual cue.
+    const n = view.slide_count || (view.audio_paths || []).length || 0;
+    return Array.from({ length: n }, (_, i) => ({
+      html: `<div class="thumb-label">Slide ${i + 1}</div>
+             <div class="thumb-slide">
+               <iframe src="/artifact/slides/${i}${thumbBust}" scrolling="no"></iframe>
+             </div>`,
+    }));
+  }
   if (stage === "motion_design") {
     // Extension stage (shuttleslide-pro). Per-slide live WAAE preview.
     // The snapshot's state_view.motion_design.spec.slides carries one
@@ -812,6 +837,12 @@ function renderPreview() {
       host.dataset.bust = `?t=${Date.now()}`;
       previewContent.appendChild(host);
       extEntry.render(snap, host);
+      // Extension renderers bypass setPreview() (which calls this),
+      // so invoke renderStaleBanner() explicitly here. Without this,
+      // per-slide stale marks on extension stages (motion_design,
+      // render_video) show the thumbnail badge but never the "Update
+      // this item" banner — the user sees no way to act on staleness.
+      renderStaleBanner();
       extOk = true;
     } catch (e) {
       console.error(`[review] extension renderer for "${activeStage}" threw:`, e);
@@ -3818,15 +3849,26 @@ function renderStaleBanner() {
   if (prior) prior.remove();
   const stage = activeStage;
   if (!stage) return;
-  let idx = null;
-  if (stage === "outline" || stage === "images" || stage === "slides" || stage === "rendered") {
-    idx = activeItemIdx;
-  }
+  // theme + outline are deck-level (no per-item concept). Every other
+  // stage — including extension stages (script, voiceover, subtitle,
+  // motion_design, render_video) — is per-slide and uses activeItemIdx
+  // to find the matching stale mark.
+  if (stage === "theme" || stage === "outline") return;
+  const idx = activeItemIdx;
   const mark = getStaleMark(stage, idx);
   if (!mark) return;
-  // Outline + theme are sources — no per-item regenerate (user must
-  // edit upstream directly). Don't show the banner for those.
-  if (stage === "outline" || stage === "theme") return;
+
+  // Display noun for the banner text. Builtin stages use specific
+  // nouns ("slide", "image", "render"); extension stages fall back
+  // to the generic "item" so the public repo doesn't hardcode pro
+  // stage names. The stale mark's reason text carries stage-specific
+  // context, so the generic noun doesn't lose information.
+  const STALE_NOUNS = {
+    slides: "slide",
+    images: "image",
+    rendered: "render",
+  };
+  const noun = STALE_NOUNS[stage] || "item";
 
   const banner = document.createElement("div");
   banner.id = "stale-banner";
@@ -3835,11 +3877,11 @@ function renderStaleBanner() {
   banner.innerHTML = `
     <div class="stale-banner-icon" title="${escapeAttr(reasonText)}">⚠</div>
     <div class="stale-banner-body">
-      <div class="stale-banner-title">This ${escapeHtml(stage === "slides" ? "slide" : (stage === "images" ? "image" : "render"))} may be out of date</div>
+      <div class="stale-banner-title">This ${escapeHtml(noun)} may be out of date</div>
       <div class="stale-banner-reason">${escapeHtml(reasonText)}</div>
     </div>
     <div class="stale-banner-actions">
-      <button class="stale-btn stale-btn-primary" data-action="regenerate" data-mode="incremental">Update this ${escapeHtml(stage === "slides" ? "slide" : (stage === "images" ? "image" : "render"))}</button>
+      <button class="stale-btn stale-btn-primary" data-action="regenerate" data-mode="incremental">Update this ${escapeHtml(noun)}</button>
       <button class="stale-btn" data-action="regenerate" data-mode="fresh" title="Regenerate from scratch — discards manual edits">From scratch</button>
       <button class="stale-btn stale-btn-ghost" data-action="dismiss" title="Keep the current value as-is">Dismiss</button>
     </div>

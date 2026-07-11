@@ -1763,6 +1763,26 @@ class InteractiveOrchestrator(AgentOrchestrator):
                 stages_to_refresh.append("slides")
             if state.html_paths:
                 stages_to_refresh.append("rendered")
+        elif stage == "script":
+            # Script edits mirror-write the new text into
+            # voiceover.last_scripts (script.py:regenerate_item). Re-emit
+            # the voiceover snapshot so its textarea reflects the new
+            # value without forcing the user to re-run voiceover. Skip
+            # if voiceover hasn't run yet (snapshot build would be empty).
+            vo_out = (state.stage_outputs or {}).get("voiceover")
+            if isinstance(vo_out, dict) and vo_out:
+                stages_to_refresh.append("voiceover")
+        elif stage == "voiceover":
+            # Voiceover's Apply Edit mirrors the script text back into
+            # script.slides[N].script AND cascades into
+            # SubtitleStage.regenerate_item (which rewrites the .srt +
+            # subtitle state). Re-emit both so the UIs stay in sync.
+            script_out = (state.stage_outputs or {}).get("script")
+            if isinstance(script_out, dict) and script_out:
+                stages_to_refresh.append("script")
+            sub_out = (state.stage_outputs or {}).get("subtitle")
+            if isinstance(sub_out, dict) and sub_out:
+                stages_to_refresh.append("subtitle")
         for s in stages_to_refresh:
             try:
                 snapshot = build_snapshot(
