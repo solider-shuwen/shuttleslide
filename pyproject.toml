@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "shuttleslide"
-version = "0.1.1"
+version = "0.1.2"
 description = "Bidirectional PPTX ↔ HTML conversion with round-trip format preservation, plus an optional AI slide-generation pipeline"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -97,6 +97,7 @@ where = ["src"]
 "shuttleslide.agent.review" = ["static/*.html", "static/*.js", "static/*.css"]
 "shuttleslide.html_to_pptx" = ["js/*.js"]
 "shuttleslide.pptx_to_html" = ["templates/*.html", "templates/*.css", "templates/*.js", "data/*.xml"]
+"shuttleslide.skills" = ["*/SKILL.md"]
 
 [tool.black]
 line-length = 100

@@ -76,7 +76,7 @@ def _resolve_output_path(output: Optional[str], input_path: Path, suffix: str) -
 
 
 @click.group()
-@click.version_option(version="0.1.1")
+@click.version_option(version="0.1.2")
 def main():
     """
     Shuttleslide - Bidirectional PPTX ↔ HTML conversion library.
@@ -357,7 +357,7 @@ def info():
     """
     Show information about the Shuttleslide project.
     """
-    click.echo("Shuttleslide v0.1.1")
+    click.echo("Shuttleslide v0.1.2")
     click.echo("")
     click.echo("Bidirectional PPTX ↔ HTML conversion library")
     click.echo("with round-trip format preservation.")
@@ -788,6 +788,144 @@ def review(
             server.shutdown()
         except Exception:
             pass
+
+
+@main.command("install-skill")
+@click.option("--force", is_flag=True,
+              help="Overwrite existing skill files when content differs.")
+@click.option("--path", "target_root", type=click.Path(),
+              default=None,
+              help="Deploy skills to this directory instead of ~/.claude/skills/.")
+@click.option("--list", "list_only", is_flag=True,
+              help="List built-in skills and target paths; don't copy anything.")
+def install_skill(force: bool, target_root: Optional[str], list_only: bool):
+    """Deploy bundled Claude Code skill files to ~/.claude/skills/.
+
+    Each skill ships as a SKILL.md inside the shuttleslide package. This
+    command copies them to the user's ~/.claude/skills/<skill-name>/ so
+    Claude Code (and other agent harnesses consuming the same format)
+    can discover and invoke slidecraft via natural language.
+
+    \b
+    Idempotency:
+      - target missing   -> write
+      - content same     -> skip
+      - content differs  -> WARN (use --force to overwrite)
+
+    \b
+    Examples:
+      slidecraft install-skill                # deploy to ~/.claude/skills/
+      slidecraft install-skill --list         # dry-run: show source + target
+      slidecraft install-skill --force        # overwrite divergent files
+      slidecraft install-skill --path /tmp/x  # custom deploy root
+    """
+    import hashlib
+    from importlib.resources import files
+
+    from shuttleslide.extensions.skill_registry import iter_extension_skill_dirs
+
+    # Locate built-in source skills (src/shuttleslide/skills/<name>/SKILL.md).
+    # Uses importlib.resources so package-data works whether installed from
+    # wheel, sdist, or `pip install -e .` (zipped or unpacked).
+    builtin_root = files("shuttleslide.skills")
+    builtin_names = ["slidecraft", "slidecraft-to-html", "slidecraft-review"]
+    sources = []
+    missing = []
+    for name in builtin_names:
+        src = builtin_root / name / "SKILL.md"
+        if src.is_file():
+            sources.append((name, src))
+        else:
+            missing.append(name)
+
+    # Extension skills (shuttleslide-pro; empty today). Collisions with
+    # built-in names are skipped — same rule as cli_registry.
+    builtin_name_set = {n for n, _ in sources}
+    for ext_dir in iter_extension_skill_dirs():
+        if ext_dir.name in builtin_name_set:
+            click.echo(
+                f"[shuttleslide] extension skill '{ext_dir.name}' collides "
+                f"with a built-in skill; skipping.",
+                err=True,
+            )
+            continue
+        skill_file = ext_dir / "SKILL.md"
+        if skill_file.is_file():
+            sources.append((ext_dir.name, skill_file))
+
+    if missing:
+        click.echo(
+            f"Error: built-in skill files missing from package: "
+            f"{', '.join(missing)}.\n"
+            f"This means the installed shuttleslide package did not "
+            f"include the skills/ data.\n"
+            f"Try: pip install --force-reinstall shuttleslide",
+            err=True,
+        )
+        sys.exit(1)
+
+    if target_root is None:
+        deploy_root = Path.home() / ".claude" / "skills"
+    else:
+        deploy_root = Path(target_root)
+
+    if list_only:
+        click.echo(f"Deploy root: {deploy_root}")
+        click.echo(f"Force overwrite: {force}")
+        click.echo("")
+        click.echo("Skills:")
+        for name, src in sources:
+            target = deploy_root / name / "SKILL.md"
+            click.echo(f"  {name}")
+            click.echo(f"    source: {src}")
+            click.echo(f"    target: {target}")
+        return
+
+    # Deploy with sha256 idempotency. Read source as bytes so newline
+    # translation doesn't perturb the hash on Windows (the deployed file
+    # keeps the original bytes too, preserving frontmatter formatting).
+    deploy_root.mkdir(parents=True, exist_ok=True)
+    counts = {"installed": 0, "skipped": 0, "overwritten": 0, "warn": 0, "failed": 0}
+
+    for name, src in sources:
+        target_dir = deploy_root / name
+        target_file = target_dir / "SKILL.md"
+        try:
+            src_bytes = src.read_bytes()
+            src_hash = hashlib.sha256(src_bytes).hexdigest()
+
+            if target_file.exists():
+                target_hash = hashlib.sha256(target_file.read_bytes()).hexdigest()
+                if target_hash == src_hash:
+                    counts["skipped"] += 1
+                    click.echo(f"[SKIP] {name} up-to-date")
+                    continue
+                if not force:
+                    counts["warn"] += 1
+                    click.echo(f"[WARN] {name} differs (use --force)", err=True)
+                    continue
+                target_file.write_bytes(src_bytes)
+                counts["overwritten"] += 1
+                click.echo(f"[OK] {name} overwritten")
+            else:
+                target_dir.mkdir(parents=True, exist_ok=True)
+                target_file.write_bytes(src_bytes)
+                counts["installed"] += 1
+                click.echo(f"[OK] {name} installed")
+        except OSError as e:
+            counts["failed"] += 1
+            click.echo(f"[FAIL] {name}: {e}", err=True)
+
+    click.echo("")
+    click.echo(
+        f"installed={counts['installed']} "
+        f"skipped={counts['skipped']} "
+        f"overwritten={counts['overwritten']} "
+        f"warn={counts['warn']} "
+        f"failed={counts['failed']}"
+    )
+    if counts["failed"]:
+        sys.exit(1)
 
 
 def platform_supports_sigterm() -> bool:

@@ -179,6 +179,22 @@ pip install shuttleslide[review]
 slidecraft review
 ```
 
+### D. Use with Claude Code (and other AI agents)
+
+Shuttleslide ships an official **Claude Code skill bundle** inside the pip package. One command deploys three skills (`slidecraft`, `slidecraft-to-html`, `slidecraft-review`) to `~/.claude/skills/`, after which Claude Code — or any agent harness that consumes the `SKILL.md` format — can invoke `slidecraft` via natural language:
+
+```bash
+pip install shuttleslide
+slidecraft install-skill          # deploys to ~/.claude/skills/
+```
+
+Then in Claude Code:
+
+> *"Convert this deck to HTML for RAG ingestion"* → triggers `slidecraft-to-html`
+> *"Review the generated slides before finalizing"* → triggers `slidecraft-review`
+
+Idempotent (sha256-checked); re-run after upgrading Shuttleslide to pick up skill updates, or pass `--force` to overwrite local edits.
+
 ---
 
 ## Examples
@@ -320,6 +336,7 @@ Full API reference: [docs/python-api.md](docs/python-api.md).
 | `slidecraft generate` | AI: topic → multi-slide HTML deck |
 | `slidecraft review` | AI: launch the human-in-the-loop web UI |
 | `slidecraft warm-cache` | Pre-download CDN assets for offline generation |
+| `slidecraft install-skill` | Deploy bundled Claude Code skills to `~/.claude/skills/` |
 | `slidecraft info` | Print version and project info |
 
 Complete options, environment variables, and examples: [docs/cli-reference.md](docs/cli-reference.md).
@@ -375,7 +392,7 @@ Every Shuttleslide capability is a standalone `slidecraft` subcommand. This isn'
 
 The CLI is the contract. Each command has a single, well-defined job — `to-html` converts a file, `analyze` inspects one, `generate` runs the AI agent — and produces deterministic outputs you can pipe, chain, or script. That means Shuttleslide isn't just a Python library: it's an **AI-agent-ready toolkit**. Any agent harness (Claude Code, Cursor, Copilot CLI, Cline, Aider, …) can read `slidecraft --help` and start orchestrating presentation workflows without learning a Python API.
 
-The roadmap makes this explicit — a future Phase 4 ships an official Skill package (`SKILL.md` + `marketplace.json`) so Shuttleslide can be installed directly into AI IDEs the same way other workflow tools are.
+This isn't theoretical. `slidecraft install-skill` deploys a bundled Claude Code skill package — three `SKILL.md` files that teach Claude Code the natural-language triggers for `to-html`, `review`, and the rest of the CLI. Other agent harnesses that consume the same format can use the same files. See [Quick start §D](#d-use-with-claude-code-and-other-ai-agents) above.
 
 ---
 
@@ -391,8 +408,9 @@ The roadmap makes this explicit — a future Phase 4 ships an official Skill pac
 - **Phase 3 — Round-trip closure** 🚧 *in progress*
   - `data-pptx-*` metadata fully round-trips for all element types
   - Format-integrity verification tooling
-- **Phase 4 — Skill package** 📋 *planned*
-  - `SKILL.md` + marketplace manifest for AI-IDE installation
+- **Phase 4 — Skill package** 🚧 *in progress*
+  - ✅ `slidecraft install-skill` ships three Claude Code skills inside the pip package
+  - 📋 Marketplace manifest for one-click IDE installation
 
 ---
 
