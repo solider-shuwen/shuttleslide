@@ -51,12 +51,12 @@ dependencies = [
 
 [project.optional-dependencies]
 ai = [
-    # `slidecraft generate` / `review` 命令需要 OpenAI 兼容 LLM
+    # `slidecraft generate` / `review` commands require an OpenAI-compatible LLM
     "openai>=1.0,<2.0",
     "trafilatura>=1.12.0",
 ]
 review = [
-    # `slidecraft review` 的 web UI（FastAPI + WebSocket）
+    # `slidecraft review` web UI (FastAPI + WebSocket)
     "fastapi>=0.100.0",
     "uvicorn>=0.20.0",
     "websockets>=11.0",

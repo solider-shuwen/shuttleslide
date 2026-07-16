@@ -307,6 +307,11 @@ OUTLINE_PLANNER_PROMPT = """\
 You are a presentation architect. Plan the OUTLINE of {count_instruction} \
 on the topic below.
 
+OUTPUT LANGUAGE: Follow the topic's language. If the topic is in Chinese, \
+all user-facing text you produce (titles, purposes, key_points, layout_hints, \
+image descriptions) MUST be in Chinese. If the topic is in English, output \
+English. If the topic mixes languages, default to the topic's primary language.
+
 OUTPUT: Call `define_outline` ONCE with a list of slides. Do not call any \
 other tool.
 
@@ -321,21 +326,21 @@ Each slide in the outline has:
   structure. Be specific — this hint guides the slide-builder's HTML
   design. {layout_hint_examples}
 
-PYRAMID PRINCIPLE (金字塔原理 — 总·分·总):
+PYRAMID PRINCIPLE (Minto Pyramid Principle — Overview · Decomposition · Synthesis):
 Every deck MUST follow Overview -> Decomposition -> Synthesis.
 
-- Slide 1 — OVERVIEW (总): Hero cover that states the CENTRAL THESIS in one
+- Slide 1 — OVERVIEW: Hero cover that states the CENTRAL THESIS in one
   clear sentence. The audience must hear the punchline before any detail.
   key_points[0] should be the thesis verbatim.
 
-- Slides 2..N-1 — DECOMPOSITION (分): Break the thesis into 2-4 MECE
+- Slides 2..N-1 — DECOMPOSITION: Break the thesis into 2-4 MECE
   (Mutually Exclusive, Collectively Exhaustive) argument groups. Each group
   gets 1-3 slides developing its claim with evidence, examples, or steps.
   Optionally insert a section_divider between groups (counted toward total).
   Vary content layouts across slides — do not stack 3 identical layouts in
   a row.
 
-- Slide N — SYNTHESIS (总): Recap each argument group in one sentence,
+- Slide N — SYNTHESIS: Recap each argument group in one sentence,
   reinforce the central thesis, and point forward (next steps / decision /
   Q&A). NOT a generic "Thank You" slide — it must restate the value.
 
@@ -458,9 +463,8 @@ dividers (just a number + heading), and the Synthesis recap slide.
                        scene, product, person, place, brand, or texture.
                        source_type="web" requires source_ref.
     * source_ref    — Required when source_type="web". A search query
-                       (e.g. "现代咖啡馆室内" or "modern coffee shop
-                       interior") or an absolute https URL. Ignored
-                       when source_type="svg".
+                       (e.g. "modern coffee shop interior") or an absolute
+                       https URL. Ignored when source_type="svg".
     * description   — concrete enough that an illustrator (svg) or a VLM
                        (web) could judge the result against it without
                        more context. For flowcharts: name every node and
@@ -474,12 +478,12 @@ dividers (just a number + heading), and the Synthesis recap slide.
 
 WORKED EXAMPLES — source_type decisions by topic:
 
-  "Tesla Model 3 介绍" hero     -> source_type="web" (subject IS the literal car)
-  "三亚旅游攻略" hero           -> source_type="web" (real scenery)
-  "我们的 CI/CD 流水线架构"     -> source_type="svg" (boxes + arrows)
-  "公司组织架构" diagram        -> source_type="svg" (tree)
-  "咖啡馆品牌升级" hero         -> source_type="web" (interior photo)
-  "咖啡馆品牌升级" mood board   -> source_type="web" (marble texture)
+  "Tesla Model 3 intro" hero      -> source_type="web" (subject IS the literal car)
+  "Sanya travel guide" hero       -> source_type="web" (real scenery)
+  "Our CI/CD pipeline architecture" -> source_type="svg" (boxes + arrows)
+  "Org structure" diagram         -> source_type="svg" (tree)
+  "Cafe brand refresh" hero       -> source_type="web" (interior photo)
+  "Cafe brand refresh" mood board -> source_type="web" (marble texture)
 
 Image spec field shape (one item in slide.images — write fields, not braces):
   slot_id="hero", aspect_ratio="16:9", image_type="hero",
@@ -806,6 +810,11 @@ You are a presentation architect. Plan the STRUCTURE of {count_instruction} \
 on the topic below. Do NOT write detailed key_points or image specs yet — \
 a follow-up stage will fill those in per slide.
 
+OUTPUT LANGUAGE: Follow the topic's language. If the topic is in Chinese, \
+all user-facing text you produce (thesis, group names, titles, purposes) \
+MUST be in Chinese. If the topic is in English, output English. If the \
+topic mixes languages, default to the topic's primary language.
+
 OUTPUT: Call `define_skeleton` ONCE with three top-level fields:
   - thesis: the central claim of the deck in ONE clear sentence.
   - groups: 2-4 MECE argument groups (Mutually Exclusive, Collectively \
@@ -814,7 +823,7 @@ Exhaustive). Each group has id / name / slide_indices.
 layout_intent / image_intent. Every slide index must appear in exactly \
 one group's slide_indices.
 
-PYRAMID PRINCIPLE (金字塔原理 — 总·分·总):
+PYRAMID PRINCIPLE (Minto Pyramid Principle — Overview · Decomposition · Synthesis):
   - Slide 1 (index 0) — OVERVIEW: states the thesis. key_points[0] will \
 become the deck's tagline.
   - Slides 2..N-1 — DECOMPOSITION: 1-3 slides per MECE group, developing \
@@ -882,6 +891,13 @@ on the topic "{topic}". The skeleton stage already committed this slide's \
 title, purpose, group, and image_intent — your job is to produce concrete \
 key_points + a varied layout_hint + (if image_intent != "none") image specs.
 
+OUTPUT LANGUAGE: Follow the topic's language. If the topic is in Chinese, \
+all user-facing text you produce (key_points, layout_hints, image \
+descriptions) MUST be in Chinese. If the topic is in English, output \
+English. If the topic mixes languages, default to the topic's primary \
+language. Do not translate the skeleton's existing title/purpose — keep \
+them in whatever language they already are.
+
 CURRENT SLIDE SKELETON (do not change these):
   title:        {skeleton_title}
   purpose:      {skeleton_purpose}
@@ -909,7 +925,7 @@ structure. MUST differ from previous slides' layouts listed above.
       * image_intent="illustration"  images has 1 spec with image_type="illustration" or "hero"
 
 KEY_POINTS QUALITY:
-  - Concrete > abstract. "Tesla Model 3 起售价 $38,990" beats "good value".
+  - Concrete > abstract. "Tesla Model 3 starts at $38,990" beats "good value".
   - Each key_point is ONE complete sentence, not a bullet fragment.
   - 2-5 points; 3 is the sweet spot for content slides.
   - Key_points must support the slide's purpose — not just be topically related.

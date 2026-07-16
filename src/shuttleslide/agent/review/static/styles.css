@@ -399,7 +399,7 @@ body.edit-in-progress .thumb-dropzone {
 .stage-tab.completed {
   background: var(--success-soft);
   color: var(--success);
-  cursor: pointer;          /* completed stages are clickable (回看) */
+  cursor: pointer;          /* completed stages are clickable (review) */
 }
 .stage-tab.completed:hover { background: color-mix(in srgb, var(--success) 18%, transparent); }
 .stage-tab.completed .icon { background: var(--success); }
@@ -507,7 +507,7 @@ main {
   flex-direction: column;
   gap: 8px;
 }
-/* HTML hidden 属性必须显式压过 display:flex — 否则两个面板会同时显示 */
+/* The HTML hidden attribute must explicitly override display:flex — otherwise both panels show at once */
 #thumb-list[hidden],
 #history-list[hidden] {
   display: none !important;
@@ -2033,8 +2033,8 @@ input.locked-field:focus {
   gap: 8px;
   position: relative;
 }
-/* 默认非编辑态：svg-canvas 上覆盖一个「双击进入编辑」浮层。
-   pointer-events: none 让 hover 提示不挡 SVG 的双击事件 */
+/* Default non-editing state: overlay a "double-click to edit" hint on the svg-canvas.
+   pointer-events: none so the hover hint doesn't block the SVG double-click event */
 .svg-edit-overlay {
   position: absolute;
   inset: 0;
@@ -2053,7 +2053,7 @@ input.locked-field:focus {
   opacity: 1;
   background: rgba(255, 255, 255, 0.55);
 }
-/* 进入编辑态后隐藏 overlay */
+/* Hide overlay once editing mode is active */
 .svg-edit-host.editing .svg-edit-overlay {
   display: none;
 }
@@ -2173,9 +2173,9 @@ input.locked-field:focus {
   cursor: text;
 }
 
-/* 浮层 HTML input — 所见即所得编辑 SVG <text>。
-   绝对定位到文字屏幕位置，字号/字体/颜色由 JS 内联设置匹配 SVG text。
-   背景半透明 + 边框让用户清楚这是个编辑框（不是直接画布）。 */
+/* Overlay HTML input — WYSIWYG editing of SVG <text>.
+   Absolutely positioned at the text's screen position; font-size/font-family/color are set inline by JS to match the SVG text.
+   Semi-transparent background + border so the user can tell this is an edit box (not the canvas itself). */
 .svg-canvas {
   position: relative;
 }

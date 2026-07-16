@@ -1,14 +1,15 @@
 /**
- * extract_layout.js — Playwright 注入脚本
+ * extract_layout.js — Playwright injection script
  *
- * 遍历 .ppt-slide 内的所有可视元素，提取布局信息：
- * - getBoundingClientRect() → 精确像素位置
- * - getComputedStyle() → 字体、颜色、背景等
+ * Walks every visible element inside .ppt-slide and extracts layout info:
+ * - getBoundingClientRect() → precise pixel positions
+ * - getComputedStyle() → font, color, background, etc.
  *
- * 所有坐标已转为 .ppt-slide 渲染尺寸的百分比。幻灯片尺寸由
- * 模板通过 .ppt-slide 的 CSS 宽高决定（默认 1280x720；调用方
- * 可以覆盖为 9:16 / 1:1 / 3:4 等），脚本直接读取实际渲染尺寸，
- * 所以天然支持任意画布比例而不需要额外参数。
+ * All coordinates are normalized to percentages of .ppt-slide's rendered
+ * dimensions. Slide dimensions come from the template's CSS width/height on
+ * .ppt-slide (default 1280x720; callers may override to 9:16 / 1:1 / 3:4 /
+ * etc.). The script reads the actual rendered dimensions directly, so it
+ * supports any canvas aspect ratio with no extra parameters.
  */
 (() => {
     const slideEl = document.querySelector('.ppt-slide') || document.body;
@@ -19,11 +20,11 @@
     const SLIDE_W = slideRect.width || 1280;
     const SLIDE_H = slideRect.height || 720;
 
-    // 辅助：rgb(r, g, b) / rgba(r, g, b, a) → { hex: "#RRGGBB", alpha: 0.0~1.0 }
+    // Helper: rgb(r, g, b) / rgba(r, g, b, a) → { hex: "#RRGGBB", alpha: 0.0~1.0 }
     function parseRgba(rgb) {
         if (!rgb || rgb === 'transparent' || rgb === 'rgba(0, 0, 0, 0)') return null;
         const m = rgb.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
-        if (!m) return { hex: rgb, alpha: 1.0 }; // 已经是 hex 或其他格式
+        if (!m) return { hex: rgb, alpha: 1.0 }; // already hex or another format
         const r = parseInt(m[1]).toString(16).padStart(2, '0');
         const g = parseInt(m[2]).toString(16).padStart(2, '0');
         const b = parseInt(m[3]).toString(16).padStart(2, '0');
@@ -31,7 +32,7 @@
         return { hex: `#${r}${g}${b}`, alpha: a };
     }
 
-    // 辅助：rgb(r, g, b) → #RRGGBB, rgba(r,g,b,a) → #RRGGBBAA
+    // Helper: rgb(r, g, b) → #RRGGBB, rgba(r,g,b,a) → #RRGGBBAA
     function rgbToHex(rgb) {
         const parsed = parseRgba(rgb);
         if (!parsed) return null;
@@ -43,7 +44,7 @@
         return parsed.hex;
     }
 
-    // 辅助：解析 linear-gradient(...)
+    // Helper: parse linear-gradient(...)
     function parseGradient(bgImage) {
         if (!bgImage || bgImage === 'none') return null;
         // Use greedy match to handle nested parentheses in rgba() colors
@@ -51,18 +52,19 @@
         if (!gradMatch) return null;
         const inner = gradMatch[1];
 
-        // 提取方向：保留原始 CSS 角度（css_<deg> 协议），让下游
-        // `gradient_angle_deg` 用通用公式转换。无显式角度时回退到
-        // 命名方向，便于向后兼容。
+        // Extract direction: preserve the raw CSS angle (css_<deg> protocol)
+        // so downstream `gradient_angle_deg` can convert via the general
+        // formula. Fall back to a named direction when no explicit angle
+        // is present, for backwards compatibility.
         //
-        // 默认值必须是 ``css_180``（to bottom）——这是 CSS Images
-        // Module Level 4 规定的 ``linear-gradient()`` 无方向参数时的
-        // 默认方向。Chrome 也据此把 ``linear-gradient(180deg, ...)``
-        // 和 ``linear-gradient(to bottom, ...)`` 都归一化成无方向
-        // 字符串（``linear-gradient(<stops>)``），所以这两种写法都
-        // 会落到这里的 fallback。如果默认值错设为 ``css_90``，所有
-        // 期望自上而下渐变的 fade-in / overlay 都会被错误渲染成
-        // 从左到右。
+        // The default MUST be ``css_180`` (to bottom) — this is the
+        // default direction specified by CSS Images Module Level 4 when
+        // ``linear-gradient()`` is called with no direction argument.
+        // Chrome normalises ``linear-gradient(180deg, ...)`` and
+        // ``linear-gradient(to bottom, ...)`` into the same directionless
+        // string (``linear-gradient(<stops>)``), so both forms land in
+        // this fallback. If the default were wrongly set to ``css_90``,
+        // every top-down fade-in / overlay would render left-to-right.
         let direction = 'css_180';
         const degMatch = inner.match(/(?:^|,)\s*(-?\d+(?:\.\d+)?)deg\s*,/);
         if (degMatch) {
@@ -77,24 +79,28 @@
             direction = 'css_0';
         }
 
-        // 提取颜色 stop + 可选的显式位置（color 后跟 <num>%）。
-        // 用全局正则扫描颜色 token，然后对每个匹配查它后面是否紧跟
-        // 百分比。所有 stop 都有显式位置时按位置存；否则均匀分布。
-        // colorRegex 必须显式匹配 CSS `transparent` 关键字——它既不是
-        // #hex 也不是 rgba()，否则会被静默丢弃，让 fade-in overlay
-        // 丢失顶部透明的 stop（如 slide 1 的 `linear-gradient(180deg,
-        // transparent 0%, #1A6DFF 25%, ...)`）。
+        // Extract color stops + optional explicit positions (color followed
+        // by <num>%). Use a global regex to scan color tokens, then for
+        // each match check whether a percentage follows. When every stop
+        // has an explicit position, store by position; otherwise distribute
+        // evenly. colorRegex MUST explicitly match the CSS `transparent`
+        // keyword — it's neither #hex nor rgba(), so it would otherwise be
+        // silently dropped, stripping the transparent top stop from a
+        // fade-in overlay (e.g. slide 1's `linear-gradient(180deg,
+        // transparent 0%, #1A6DFF 25%, ...)`).
         const colorRegex = /(transparent|#(?:[0-9a-fA-F]{3,8})|rgba?\([^)]+\))\s*(\d+(?:\.\d+)?)?%/g;
         const raw = [];
         let m;
         while ((m = colorRegex.exec(inner)) !== null) {
             const literal = m[1];
-            // CSS `transparent` 和 `rgba(0,0,0,0)` 都表示 alpha=0 的黑——
-            // 在 gradient stop 里必须保留为 alpha=0，否则 fade-in overlay
-            // 会从"亮蓝实色"开始，与 HTML 视觉不一致。不复用 parseRgba：
-            // 它对 transparent 返回 null（让 rgbToHex 在 bg-color 提取时
-            // 返回 null，配合 Python 侧 _has_bg_color 的过滤名单），gradient
-            // 路径需要相反行为。
+            // CSS `transparent` and `rgba(0,0,0,0)` both denote alpha=0 black.
+            // Inside a gradient stop they MUST be preserved as alpha=0,
+            // otherwise a fade-in overlay would start from solid bright blue
+            // and diverge from the HTML visual. Don't reuse parseRgba here:
+            // it returns null for `transparent` (so rgbToHex returns null
+            // during bg-color extraction, which the Python-side
+            // _has_bg_color filter relies on); the gradient path needs the
+            // opposite behaviour.
             let hex, alpha;
             if (literal === 'transparent' || literal === 'rgba(0, 0, 0, 0)' || literal === 'rgba(0,0,0,0)') {
                 hex = '#000000';
@@ -107,7 +113,7 @@
             raw.push({
                 color: hex,
                 opacity: alpha,
-                posStr: m[2],  // undefined when no explicit %
+                posStr: m[2],  // posStr: undefined when no explicit %
             });
         }
         if (raw.length < 2) return null;
@@ -124,13 +130,13 @@
         return { direction, stops };
     }
 
-    // 辅助：px 字符串 → 数值
+    // Helper: px string → numeric value
     function pxToNum(px) {
         if (!px || px === 'auto') return 0;
         return parseFloat(px) || 0;
     }
 
-    // 判断元素是否有视觉内容
+    // Determine whether an element has visual content
     function hasVisualContent(el, style) {
         // SVG (inline <svg data-slot="...">) — always visual even without
         // text/background, otherwise pure-shape diagrams get dropped.
@@ -138,16 +144,16 @@
         // documents (foreign content rule), but uppercase 'SVG' in pure
         // XML documents. Accept both.
         if (el.tagName === 'svg' || el.tagName === 'SVG') return true;
-        // 有文字
+        // Has text
         if (el.textContent && el.textContent.trim().length > 0) return true;
-        // 有图片
+        // Has image
         if (el.tagName === 'IMG' || el.src || el.getAttribute('src')) return true;
-        // 有背景色（非透明）
+        // Has non-transparent background color
         const bgColor = style.backgroundColor;
         if (bgColor && bgColor !== 'rgba(0, 0, 0, 0)' && bgColor !== 'transparent') return true;
-        // 有渐变背景
+        // Has gradient background
         if (style.backgroundImage && style.backgroundImage !== 'none') return true;
-        // 有边框
+        // Has border
         if (parseFloat(style.borderWidth) > 0) return true;
         // Material Icon
         if (el.classList && (
@@ -185,7 +191,7 @@
         return result;
     }
 
-    // 判断是否为纯容器（无视觉内容，只是布局用）
+    // Determine whether an element is a pure container (no visual content, layout only)
     function isPureContainer(el, style) {
         // SVG tagName is 'svg' (lowercase) in HTML documents but 'SVG' in XML.
         if (el.tagName === 'IMG' || el.tagName === 'svg' || el.tagName === 'SVG' || el.tagName === 'VIDEO') return false;
@@ -194,8 +200,9 @@
         return !hasVisualContent(el, style);
     }
 
-    // 内联标签白名单：这些标签的文字会合并进父元素的 inlineRuns，
-    // 保留各自样式（颜色/粗细），并保留 <br> 换行结构。
+    // Inline-tag whitelist: text inside these tags is merged into the
+    // parent element's inlineRuns, preserving per-run styles (color/weight)
+    // and the <br> line-break structure.
     const INLINE_TAGS = new Set([
         'SPAN', 'STRONG', 'EM', 'B', 'I', 'A', 'U', 'MARK',
         'SMALL', 'SUB', 'SUP', 'BIG', 'S', 'CODE', 'FONT', 'LABEL',
@@ -223,9 +230,11 @@
         return (clone.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 500);
     }
 
-    // 递归遍历元素的 inline 子节点，构造 [[run, run], [run]] 结构：
-    // 外层数组 = 行（<br> 切分），内层数组 = 同一行的 styled run。
-    // block 级子元素会被跳过（它们是独立元素，已自行提取）。
+    // Recursively walk an element's inline children, building a
+    // [[run, run], [run]] structure: the outer array = lines (split by
+    // <br>), the inner array = styled runs on the same line. Block-level
+    // children are skipped (they are independent elements and get
+    // extracted on their own).
     function extractInlineRuns(el, parentStyle) {
         const lines = [[]];
         const cs = parentStyle || getComputedStyle(el);
@@ -297,7 +306,7 @@
                        && INLINE_TAGS.has(node.nodeName)
                        && !node.classList.contains('material-icons')
                        && !node.classList.contains('material-symbols-outlined')) {
-                // 递归内联子元素，合并其行到当前行流。
+                // Recurse into inline children, merging their lines into the current line stream.
                 // white-space is an inherited CSS property, so child spans
                 // inside <pre> also report `pre` and preserve whitespace.
                 const childLines = extractInlineRuns(node, getComputedStyle(node));
@@ -306,7 +315,7 @@
                     lines[lines.length - 1].push(...lr);
                 });
             }
-            // block 子元素（DIV、P、UL 等）跳过：它们是独立元素，已自行提取
+            // Skip block children (DIV, P, UL, ...): they are independent elements extracted on their own.
         }
         // HTML "trim at block edges" rule: leading whitespace at the start
         // of each line's inline content and trailing whitespace at the end
@@ -337,7 +346,7 @@
                 }
             }
         }
-        // 去掉尾部空行
+        // Drop trailing empty lines
         while (lines.length > 1 && lines[lines.length - 1].length === 0) lines.pop();
         return lines;
     }
@@ -386,15 +395,15 @@
         const rect = el.getBoundingClientRect();
         const style = getComputedStyle(el);
 
-        // 过滤不可见元素
+        // Filter out invisible elements
         if (rect.width === 0 || rect.height === 0) continue;
         if (style.display === 'none' || style.visibility === 'hidden') continue;
         if (parseFloat(style.opacity) === 0) continue;
 
-        // 过滤纯容器
+        // Filter out pure containers
         if (isPureContainer(el, style)) continue;
 
-        // 相对于 slide 的位置，转为百分比
+        // Position relative to the slide, expressed as percentages
         const relX = rect.left - slideRect.left;
         const relY = rect.top - slideRect.top;
         const xPct = Math.round((relX / slideRect.width) * 10000) / 100;
@@ -402,7 +411,7 @@
         const wPct = Math.round((rect.width / slideRect.width) * 10000) / 100;
         const hPct = Math.round((rect.height / slideRect.height) * 10000) / 100;
 
-        // 字体大小 px → pt
+        // Font size px → pt
         const fontSizePx = parseFloat(style.fontSize) || 0;
         const fontSizePt = Math.round(fontSizePx * 0.75 * 10) / 10;
 
@@ -416,7 +425,7 @@
         const ancestorOpacity = cumulativeAncestorOpacity(el);
         const cumulativeOpacity = (isNaN(ownOpacity) ? 1.0 : ownOpacity) * ancestorOpacity;
 
-        // 构建元素数据
+        // Build the element data record
         const elemData = {
             tag: el.tagName,
             // Use getAttribute('class') instead of el.className:
@@ -425,8 +434,8 @@
             // (or null) for both HTML and SVG elements.
             classes: (el.getAttribute('class') || '').split(/\s+/).filter(c => c),
             text: (el.textContent || '').trim().slice(0, 500),
-            text_no_icons: textWithoutIconSpans(el), // textContent 去掉 material-icons span 的 ligature 名
-            directText: '', // 直接子文本（不含嵌套元素的文字）
+            text_no_icons: textWithoutIconSpans(el), // textContent with material-icons span ligature names stripped
+            directText: '', // direct child text only (excludes nested-element text)
             rect_pct: { x: xPct, y: yPct, w: wPct, h: hPct },
             rect_px: { x: Math.round(relX), y: Math.round(relY), w: Math.round(rect.width), h: Math.round(rect.height) },
             styles: {
@@ -482,7 +491,7 @@
                      : null,
         };
 
-        // 提取直接文本（排除子元素的文本）
+        // Extract direct text (excluding child-element text)
         for (const node of el.childNodes) {
             if (node.nodeType === Node.TEXT_NODE) {
                 const t = node.textContent.trim();
@@ -491,8 +500,9 @@
         }
         elemData.directText = elemData.directText.trim();
 
-        // 提取结构化 inlineRuns：<br> 换行 + 内联 span/strong 等的样式化文字
-        // 只有当确实有多行或多 run 时才存储，避免给每个元素都增加无意义体积。
+        // Extract structured inlineRuns: <br> line breaks + styled text from
+        // inline span/strong/etc. Only stored when there are actually
+        // multiple lines or multiple runs, to avoid bloating every element.
         const inlineLines = extractInlineRuns(el);
         const hasBR = inlineLines.length > 1;
         const hasMultiRun = inlineLines.some(l => l.length > 1);
@@ -500,13 +510,13 @@
             elemData.inlineRuns = inlineLines;
         }
 
-        // 提取关键属性
+        // Extract key attributes
         if (el.src) elemData.attrs.src = el.src;
         if (el.href) elemData.attrs.href = el.href;
         if (el.alt) elemData.attrs.alt = el.alt;
         if (el.id) elemData.attrs.id = el.id;
 
-        // SVG: 捕获原始 markup + slot_id + viewBox，供 Phase 2 转 DrawingML
+        // SVG: capture raw markup + slot_id + viewBox for Phase 2 DrawingML conversion
         // tagName is 'svg' (lowercase) in HTML, 'SVG' in XML — accept both.
         if (el.tagName === 'svg' || el.tagName === 'SVG') {
             elemData.attrs.svg_markup = el.outerHTML;
@@ -516,11 +526,13 @@
             if (vb) elemData.attrs.viewBox = vb;
         }
 
-        // 真实行数 + 最长行宽度：Range.getClientRects 在 block 元素上返回
-        // 每个视觉行一个 rect（不同于 Element.getClientRects 只返回 block box）。
-        // 这是判断"单行 vs 多行"和"实际文字宽度"的权威信号，供 Stage 2
-        // _widen_text_position 用真实渲染结果替代 canvas.measureText 的理论
-        // 单行宽度猜测。
+        // Real line count + widest line: Range.getClientRects on a block
+        // element returns one rect per visual line (unlike
+        // Element.getClientRects, which only returns the block box). This
+        // is the authoritative signal for "single-line vs multi-line" and
+        // "actual text width", letting Stage 2 _widen_text_position replace
+        // the theoretical single-line-width guess from canvas.measureText
+        // with the real rendered result.
         const range = document.createRange();
         range.selectNodeContents(el);
         const lineRects = Array.from(range.getClientRects())
@@ -535,8 +547,8 @@
             (rangeMaxLineWidthPx / slideRect.width) * 10000
         ) / 100;
 
-        // 文本自然宽度测量（用 canvas.measureText）
-        // 保留作为 fallback：当 Range 拿不到数据（如纯图标、空文本）时使用。
+        // Text natural-width measurement (via canvas.measureText)
+        // Kept as a fallback: used when Range yields no data (pure icon, empty text).
         const measureText = elemData.directText || elemData.text.slice(0, 200);
         if (measureText && fontSizePx > 0) {
             const fontStr = `${style.fontWeight} ${style.fontStyle} ${fontSizePx}px ${style.fontFamily}`;
@@ -556,24 +568,27 @@
         elements.push(elemData);
     }
 
-    // --- 标记被父元素 inline 合并的子元素（span 等）---
-    // 这些子元素的文字已经合并进父元素的 inlineRuns，不应再独立渲染，
-    // 否则会与父元素文字重复。classifier 会跳过 absorbedByParent=true 的元素。
+    // --- Mark children absorbed by a parent's inline merge (span etc.) ---
+    // These children's text has already been merged into the parent's
+    // inlineRuns, so rendering them independently would duplicate the
+    // parent's text. The classifier skips elements with absorbedByParent=true.
     for (let i = 0; i < elements.length; i++) {
         if (!elements[i].inlineRuns) continue;
         const parentEl = slideEl.querySelector(`[data-ss-idx="${i}"]`);
         if (!parentEl) continue;
-        // flex/grid 容器把子元素按空间位置排布——内联子元素（span）是各自
-        // 独立的定位单元格（如 div-table 的一行），而不是内联流的文本 run。
-        // 把它们合并进父元素 inlineRuns（并标记 absorbed）会把一整行表格
-        // 压成一条挤在一起的文本。跳过吸收，让每个单元格按自身 rect 渲染。
+        // flex/grid containers lay children out by spatial position — inline
+        // children (span) are independent placement cells (e.g. a row of a
+        // div-table), not runs in an inline flow. Merging them into the
+        // parent's inlineRuns (and marking them absorbed) would crush a
+        // whole table row into a single cramped text run. Skip absorption
+        // so each cell renders at its own rect.
         const parentDisplay = getComputedStyle(parentEl).display;
         if (parentDisplay === 'flex' || parentDisplay === 'inline-flex'
             || parentDisplay === 'grid' || parentDisplay === 'inline-grid') continue;
-        // 查找所有内联后代（已被父元素 inlineRuns 合并）
+        // Find all inline descendants (already merged into parent's inlineRuns)
         const inlines = parentEl.querySelectorAll(INLINE_SELECTOR);
         for (const inlineEl of inlines) {
-            // 跳过内联后代中的图标（它们由 icon_text 单独处理）
+            // Skip icons among inline descendants (they're handled separately as icon_text)
             if (inlineEl.classList.contains('material-icons')
                 || inlineEl.classList.contains('material-symbols-outlined')) continue;
             const childIdxAttr = inlineEl.getAttribute('data-ss-idx');
@@ -586,7 +601,7 @@
         }
     }
 
-    // --- 第二遍：用 elementsFromPoint 计算真实层叠顺序 ---
+    // --- Second pass: compute the real stacking order via elementsFromPoint ---
     for (let i = 0; i < elements.length; i++) {
         const ssIdx = elements[i].ss_idx;
         const el = slideEl.querySelector(`[data-ss-idx="${ssIdx}"]`);
@@ -596,21 +611,22 @@
         const cx = rect.left + rect.width / 2;
         const cy = rect.top + rect.height / 2;
 
-        // elementsFromPoint 返回该坐标处所有元素，最上层在前
+        // elementsFromPoint returns every element at this coordinate, topmost first
         const stack = document.elementsFromPoint(cx, cy);
 
-        // 统计有多少已提取元素在当前元素之上
-        // 跳过后代元素——它们是当前元素的子内容，不算独立遮挡层
+        // Count how many extracted elements sit above the current one.
+        // Skip descendant elements — they're the current element's child
+        // content, not independent occluding layers.
         let aboveCount = 0;
         for (const stackEl of stack) {
             if (stackEl === el) break;
             if (stackEl.hasAttribute && stackEl.hasAttribute('data-ss-idx')) {
-                if (el.contains(stackEl)) continue; // 跳过后代
+                if (el.contains(stackEl)) continue; // skip descendants
                 aboveCount++;
             }
         }
-        // aboveCount=0 → 最上层 → z_order 最高（最后渲染，在最前）
-        // aboveCount=3 → 上面有3层 → z_order 较低（先渲染，在后面）
+        // aboveCount=0 → topmost → highest z_order (rendered last, in front)
+        // aboveCount=3 → 3 layers above → lower z_order (rendered earlier, behind)
         elements[i].z_order = -aboveCount;
     }
 

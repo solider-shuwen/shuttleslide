@@ -219,14 +219,14 @@
 
   <!-- ============ PIPELINE SCREEN — wraps the existing stage-bar + main. ============ -->
   <section id="pipeline-screen">
-    <!-- "正在修改" progress bar — shown globally while an LLM edit is in flight.
+    <!-- "Editing" progress bar — shown globally while an LLM edit is in flight.
          All mutating affordances are disabled via body.edit-in-progress while
          this is visible. Cancel triggers a cancel_edit WS message; the server
          interrupts the LLM call and replies edit_cancelled. -->
     <div id="edit-progress-bar" class="edit-progress-bar hidden" role="status" aria-live="polite">
       <span class="edit-progress-spinner" aria-hidden="true"></span>
-      <span id="edit-progress-label">正在修改…</span>
-      <button id="edit-cancel-btn" type="button" title="中断正在进行的 LLM 修改">取消</button>
+      <span id="edit-progress-label">Editing…</span>
+      <button id="edit-cancel-btn" type="button" title="Abort in-progress LLM edit">Cancel</button>
     </div>
     <header id="stage-bar">
       <div id="stage-list"></div>
@@ -267,7 +267,7 @@
           <button id="preview-zoom-in" type="button" class="icon-btn" title="Zoom in">+</button>
         </span>
         <button id="preview-layers-btn" type="button" title="Layers (toggle element panel)">▤</button>
-        <button id="preview-add-image-btn" type="button" title="Add image to slide (pick a PNG/JPEG from disk)">＋</button>
+        <button id="preview-add-image-btn" type="button" title="Add image to slide (pick a PNG/JPEG from disk)">+</button>
         <button id="preview-fullscreen-btn" type="button" title="Fullscreen (Esc to exit)">⛶</button>
       </h3>
       <!-- Extension stage toolbar slot — populated by an extension renderer

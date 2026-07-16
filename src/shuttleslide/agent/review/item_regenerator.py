@@ -35,6 +35,7 @@ Why a separate class (not just methods on the orchestrator)?
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional, Tuple
@@ -87,6 +88,15 @@ class RegenerateResult:
     snapshot: Dict[str, Any] = field(default_factory=dict)
     remaining_marks: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
     error: str = ""
+    # True iff this regen actually mutated ``state.stale_marks`` — either
+    # via the coordinator's ``_clear_marks_for_target`` / ``_propagate_downstream``
+    # or via the stage's own internal calls (e.g. voiceover's ``slide:N``
+    # path calls ``mark_downstream_stale``). The orchestrator gates
+    # ``_broadcast_stale_marks()`` on this so read-only regens (e.g.
+    # ``voice:preview:<id>``) don't push a stale-marks refresh that
+    # would resurface pre-existing marks as a misleading "out of date"
+    # banner. Computed by deep-comparing serialized state before/after.
+    marks_changed: bool = False
 
 
 class RegenerateCoordinator:
@@ -195,6 +205,26 @@ class RegenerateCoordinator:
     ) -> RegenerateResult:
         """Inner dispatch — assumes the per-target lock is held."""
         state = self._orch._active_state
+        # Snapshot stale_marks BEFORE the stage runs so we can detect
+        # whether this regen actually mutated stale state. Some stages
+        # write marks internally (e.g. voiceover's ``slide:N`` path
+        # calls ``mark_downstream_stale``) which the coordinator-level
+        # change tracking in _clear_marks_for_target / _propagate_downstream
+        # wouldn't see. Deep-serializing here is the only approach that
+        # catches both. json.dumps(sort_keys=True) is bulletproof against
+        # the List[Dict] reordering that StaleStore.as_dict() can introduce.
+        #
+        # IMPORTANT: normalize through StaleStore.from_dict(...).as_dict()
+        # on BOTH sides of the comparison. The round-trip adds canonical
+        # fields (source_stage, source_id, created_at, context_snapshot)
+        # to each mark dict; without normalization, the act of calling
+        # ``state.stale_marks = store.as_dict()`` inside _clear_marks_for_target
+        # would trip the changed-detector even when no marks were actually
+        # added or removed.
+        _marks_before = json.dumps(
+            StaleStore.from_dict(state.stale_marks).as_dict(),
+            sort_keys=True,
+        )
         # The stage's regenerate_item gets a StageContext just like run().
         ctx = self._orch._build_stage_context(state) if hasattr(
             self._orch, "_build_stage_context"
@@ -252,12 +282,17 @@ class RegenerateCoordinator:
         if hasattr(self._orch, "_save_state"):
             self._orch._save_state(state)
 
+        _marks_after = json.dumps(
+            StaleStore.from_dict(state.stale_marks).as_dict(),
+            sort_keys=True,
+        )
         return RegenerateResult(
             ok=True,
             stage=stage_name,
             target_id=target_id,
             snapshot=snapshot_dict,
             remaining_marks=dict(state.stale_marks),
+            marks_changed=(_marks_after != _marks_before),
         )
 
     def _find_stage(self, name: str) -> Any:

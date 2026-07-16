@@ -868,9 +868,9 @@ function renderPreview() {
     let action = "";
     let attachEditor = null;
     if (item.payload.type === "svg" || item.payload.type === "svg_file") {
-      // SVG slot — 默认非编辑态：仅显示 SVG + 一个「双击进入编辑」浮层。
-      // 用户双击 host 后才注入 toolbar + 启用拖拽/文字编辑。
-      // SVG payload 已 inline 在 parent 文档（不在 iframe），可直接 attach。
+      // SVG slot — default non-editing state: show only the SVG + a "double-click to edit" overlay.
+      // The toolbar + drag/text-edit is only injected after the user double-clicks the host.
+      // The SVG payload is already inlined in the parent document (not in the iframe), so we can attach directly.
       body = `<div class="svg-edit-host" data-slide="${item.slideIdx}" data-slot="${escapeAttr(item.slotId)}">
         <div class="svg-canvas">${item.payload.data || ""}</div>
         <div class="svg-edit-overlay">Double-click to edit this SVG</div>
@@ -1188,7 +1188,7 @@ function renderChatHistory(path) {
                       <span class="chat-msg-body">${escapeHtml(entry.body || "Rejected")}</span>`;
     } else if (entry.role === "cancelled") {
       div.classList.add("cancelled");
-      div.innerHTML = `<span class="chat-msg-body">${escapeHtml(entry.body || "（已取消）")}</span>`;
+      div.innerHTML = `<span class="chat-msg-body">${escapeHtml(entry.body || "(canceled)")}</span>`;
     } else if (entry.role === "out_of_scope") {
       // Deck-level request the editor couldn't apply to a single item.
       // Render a guidance card with a "Go to <stage>" button so the user
@@ -1222,7 +1222,7 @@ function renderChatHistory(path) {
       // gaze actually is — right under the message they just sent.
       // Removed by clearPendingAssistant when the response arrives.
       div.innerHTML = `<span class="chat-msg-pending-spinner" aria-hidden="true"></span>
-                      <span class="chat-msg-body chat-msg-pending-body">${escapeHtml(entry.body || "正在生成回复…")}</span>`;
+                      <span class="chat-msg-body chat-msg-pending-body">${escapeHtml(entry.body || "Generating response…")}</span>`;
     } else {
       div.innerHTML = `<span class="chat-msg-role">${escapeHtml(entry.role)}</span>
                       <span class="chat-msg-body">${escapeHtml(entry.body || "")}</span>`;
@@ -1281,7 +1281,7 @@ function appendPendingAssistant(path, refId) {
   const idx = chatHistories[key].length;
   chatHistories[key].push({
     role: "pending",
-    body: "正在生成回复…",
+    body: "Generating response…",
     ref_id: refId,
   });
   pendingByRefId.set(refId, { key, idx });
@@ -1372,12 +1372,12 @@ function newRefId() {
   return `r-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-// Show the "正在修改..." bar + flip body class so every mutating affordance
+// Show the "Editing..." bar + flip body class so every mutating affordance
 // is dimmed/locked. The cancel button stays enabled so the user can abort.
-// label is the progress text to display (e.g. "正在修改 slide 2…").
+// label is the progress text to display (e.g. "Editing slide 2…").
 function setEditInProgress(refId, label) {
   activeEditRefId = refId;
-  if (editProgressLabel) editProgressLabel.textContent = label || "正在修改…";
+  if (editProgressLabel) editProgressLabel.textContent = label || "Editing…";
   if (editProgressBar) editProgressBar.classList.remove("hidden");
   document.body.classList.add("edit-in-progress");
   if (editCancelBtn) editCancelBtn.disabled = false;
@@ -1437,7 +1437,7 @@ chatSendBtn.addEventListener("click", () => {
   // LLM mode this also gives the conversation a "you said:" beat.
   if (chatMode === "llm") {
     appendChatEntry(target.path, "user", value);
-    // Local "正在生成回复…" indicator right under the user message.
+    // Local "Generating response…" indicator right under the user message.
     // The top edit-progress-bar is the global lock, but the user's
     // eye is on the chat panel — without this they think nothing
     // happened for the 30-60s the LLM call takes.
@@ -1449,7 +1449,7 @@ chatSendBtn.addEventListener("click", () => {
   }
   chatInput.value = "";
   chatSendBtn.disabled = true;
-  // LLM edits are long-running (30-60s). Flip the global "正在修改" lock
+  // LLM edits are long-running (30-60s). Flip the global "Editing" lock
   // on so the user gets a visible progress bar + cancel button and every
   // other mutating affordance is dimmed. The label is built from the
   // active target so the user can tell which slide/element is being
@@ -1461,16 +1461,16 @@ chatSendBtn.addEventListener("click", () => {
 });
 
 // Build the human-readable progress label for an in-flight LLM edit.
-// Falls back to a generic "正在修改…" when target metadata is missing
+// Falls back to a generic "Editing…" when target metadata is missing
 // (e.g. theme/outline targets carry no slide_idx).
 function buildEditProgressLabel(target) {
-  if (!target) return "正在修改…";
+  if (!target) return "Editing…";
   const meta = target.meta || {};
   if (typeof meta.slide_idx === "number" || typeof meta.slide_idx === "string") {
-    return `正在修改 slide ${meta.slide_idx}…`;
+    return `Editing slide ${meta.slide_idx}…`;
   }
   const stage = target.stage || "element";
-  return `正在修改 ${stage}…`;
+  return `Editing ${stage}…`;
 }
 
 // Delete button — image targets only. Pops the slot from state; the
@@ -1973,8 +1973,8 @@ function _cancelInlineEdit(iframe, el, bar, onKey) {
 // server via the ["slide", N, "slot", id] SVG direct-edit path.
 // =====================================================================
 
-// 默认非编辑态：监听 host 双击 → 进入编辑模式。
-// 不直接 attach 编辑监听 — 让用户先决定是否要改 SVG。
+// Default non-editing state: listen for host double-click → enter edit mode.
+// Don't attach edit listeners directly — let the user decide whether to modify the SVG.
 function attachSvgHostActivator(host, slideIdx, slotId) {
   host.addEventListener("dblclick", (e) => {
     if (host.classList.contains("editing")) return;
@@ -1984,7 +1984,7 @@ function attachSvgHostActivator(host, slideIdx, slotId) {
 
 function enterSvgEditMode(host, slideIdx, slotId) {
   host.classList.add("editing");
-  // 注入 toolbar（CSS 控制默认隐藏 overlay，编辑态隐藏由 .editing 类驱动）
+  // Inject toolbar (CSS hides the overlay by default; editing-state hiding is driven by the .editing class)
   const toolbar = document.createElement("div");
   toolbar.className = "svg-edit-toolbar";
   toolbar.innerHTML = `
@@ -2005,17 +2005,17 @@ function attachSvgElementEditor(host, slideIdx, slotId) {
   const SHAPE_SELECTOR =
     "rect, circle, ellipse, path, g, text, line, polygon, polyline";
 
-  // mousedown on shape/text → 一步到位：选中 + 启动 drag。
-  // text 与 shape 一样可以拖动（修改 transform）。
-  // 双击 text 触发浮层编辑是在 mouseup 后的 dblclick 事件，与此不冲突。
+  // mousedown on shape/text → one-shot: select + start drag.
+  // text can be dragged just like shapes (modifies transform).
+  // Double-clicking text to trigger overlay editing happens in the dblclick event after mouseup, so it doesn't conflict.
   svgEl.addEventListener("mousedown", (e) => {
-    // 浮层 input 显示中，不启动 drag（用户在改文字）
+    // Overlay input is showing — don't start drag (user is editing text)
     if (svgCanvas.querySelector(".svg-text-editor-input")) return;
 
     const el = e.target.closest(SHAPE_SELECTOR);
     if (!el || el === svgEl) return;
     e.preventDefault();
-    // 切换选中（单击别的元素 = 改选）
+    // Toggle selection (clicking another element = reselect)
     if (selected !== el) {
       _selectSvgElement(el, svgEl);
       selected = el;
@@ -2030,10 +2030,10 @@ function attachSvgElementEditor(host, slideIdx, slotId) {
     const ctm = svgEl.getScreenCTM();
     if (!ctm) return;
     const inv = ctm.inverse();
-    // 把屏幕坐标的两个绝对点变到 SVG 坐标系，再相减得到 SVG 空间下的 delta。
-    // 直接对 delta 做 matrixTransform 会错误应用 CTM 的平移分量 —
-    // SVGPoint.matrixTransform 把输入当作点而非方向向量，平移分量会被
-    // 加到 delta 上，导致元素飞出画布。
+    // Transform two absolute screen-coordinate points into the SVG coordinate system, then subtract to get the delta in SVG space.
+    // Calling matrixTransform on the delta directly would wrongly apply the CTM translation component —
+    // SVGPoint.matrixTransform treats its input as a point rather than a direction vector, so the translation component gets
+    // added to the delta, causing the element to fly off the canvas.
     const ptStart = svgEl.createSVGPoint();
     ptStart.x = dragStart.x; ptStart.y = dragStart.y;
     const ptNow = svgEl.createSVGPoint();
@@ -2051,8 +2051,8 @@ function attachSvgElementEditor(host, slideIdx, slotId) {
   svgCanvas.addEventListener("mouseup", () => { dragStart = null; });
   svgCanvas.addEventListener("mouseleave", () => { dragStart = null; });
 
-  // 双击 <text>/<tspan> → 浮层 input 所见即所得编辑。
-  // 双击 SVG 空白处 → 退出选中状态。
+  // Double-click <text>/<tspan> → overlay input for WYSIWYG editing.
+  // Double-click on SVG empty space → exit selection state.
   svgEl.addEventListener("dblclick", (e) => {
     const text = e.target.closest("text, tspan");
     if (text) {
@@ -2067,7 +2067,7 @@ function attachSvgElementEditor(host, slideIdx, slotId) {
     }
   });
 
-  // 单击 SVG 空白处 → 取消选中（mousedown 没 preventDefault 的话才会冒泡到 click）
+  // Click on SVG empty space → deselect (only bubbles to click if mousedown didn't preventDefault)
   svgEl.addEventListener("click", (e) => {
     if (e.target === svgEl) {
       _clearSvgSelection(svgEl);
@@ -2081,23 +2081,23 @@ function attachSvgElementEditor(host, slideIdx, slotId) {
     _commitSvgEdit(svgEl, slideIdx, slotId);
   });
   host.querySelector(".svg-cancel-btn").addEventListener("click", () => {
-    // 重画丢弃所有 DOM 修改（包括未提交的拖拽/文字编辑）。
-    // host 是新 DOM 元素，所有监听自动失效。
+    // Re-rendering discards all DOM modifications (including uncommitted drag/text edits).
+    // The host is a new DOM element, so all listeners automatically become invalid.
     renderPreview();
   });
 }
 
-// 浮层 HTML input 覆盖在 SVG <text> 位置，所见即所得编辑。
-// 替代之前的 window.prompt() — 体验与 PPT 内嵌文字编辑一致。
+// Overlay HTML input positioned over the SVG <text> for WYSIWYG editing.
+// Replaces the previous window.prompt() — UX matches in-place PPT text editing.
 //
-// 设计要点：
-// - input 字体/字号/颜色尽量匹配 SVG text（getComputedStyle 已含 CSS
-//   缩放转换后的 px 字号），实现近似所见即所得
-// - input 实时同步 text.textContent，用户每按一个字 SVG 立即更新
-// - blur/Enter 提交；Escape 恢复原始值
-// - input remove() 不触发 blur（spec），无需额外守卫
+// Design notes:
+// - Match input font/size/color to the SVG text as closely as possible (getComputedStyle
+//   already returns the px font size after CSS scaling), achieving near-WYSIWYG.
+// - The input syncs text.textContent in real time; each keystroke updates the SVG immediately.
+// - blur/Enter commits; Escape restores the original value.
+// - input remove() doesn't fire blur (per spec), so no extra guard is needed.
 function openSvgTextEditor(textEl, svgCanvas) {
-  // 已存在 editor → 先移除（防止多个 input 堆积）
+  // Existing editor present → remove first (prevents input pile-up)
   svgCanvas.querySelectorAll(".svg-text-editor-input").forEach(n => n.remove());
 
   const textRect = textEl.getBoundingClientRect();
@@ -2105,7 +2105,7 @@ function openSvgTextEditor(textEl, svgCanvas) {
   const left = textRect.left - canvasRect.left;
   const top = textRect.top - canvasRect.top;
 
-  // 字体匹配（近似）：getComputedStyle 返回的 fontSize 已经是屏幕 px
+  // Font matching (approximate): getComputedStyle returns fontSize already in screen px.
   const computed = window.getComputedStyle(textEl);
   const fontSize = parseFloat(computed.fontSize) || 14;
   const fill = textEl.getAttribute("fill") || computed.fill || "#000";
@@ -2130,7 +2130,7 @@ function openSvgTextEditor(textEl, svgCanvas) {
   input.focus();
   input.select();
 
-  // 实时同步 — 所见即所得
+  // Real-time sync — WYSIWYG
   input.addEventListener("input", () => {
     textEl.textContent = input.value;
   });
@@ -2877,8 +2877,8 @@ function renderLayersPanel(layers) {
     const label = escapeHtml(layer.label);
     // Row title doubles as inline help for the click vs dblclick split.
     const title = layer.type === "image" && layer.slotId
-      ? "单击高亮位置 · 双击进入 image 阶段编辑"
-      : "单击高亮位置";
+      ? "Click to highlight · Double-click to enter image-stage editing"
+      : "Click to highlight location";
     return `<div class="${cls}" data-layer-id="${escapeAttr(layer.id)}" role="button" title="${escapeAttr(title)}">
               <span class="layer-item__icon" aria-hidden="true">${icon}</span>
               <span class="layer-item__label">${label}</span>
@@ -4013,6 +4013,14 @@ ws.onmessage = (event) => {
     console.error("invalid JSON from server:", event.data);
     return;
   }
+  // Dispatch to extension subscribers (e.g. ext.js's inline progress
+  // bar on the voice:all button). Core handling runs below via the
+  // switch; this event fires before so extensions see the raw message
+  // regardless of which case handles it. Best-effort — never break
+  // core handling if a subscriber throws.
+  try {
+    document.dispatchEvent(new CustomEvent("slidecraft:ws-message", { detail: msg }));
+  } catch (e) { /* subscriber error — swallow */ }
   switch (msg.type) {
     case "pipeline_state": {
       // Drives config-screen ↔ pipeline-screen switching.
@@ -4047,11 +4055,11 @@ ws.onmessage = (event) => {
       // Outline draft same — structural ops (add/delete/rebalance) push
       // fresh snapshots and the draft would mask them.
       if (snap.stage === "outline") outlineDraft = null;
-      // 区分两种 stage_complete:
-      //   - 首次进入：snapshots[snap.stage] 之前是 null
-      //     → 切到这个 stage + 重置到第一项 + 弹 banner / log / arm approve
-      //   - 编辑后 refresh：apply_edit 成功后 server 重新广播同 stage 的快照
-      //     → 保留用户的 activeItemIdx（用户在编辑第 N 张，提交后应保持在第 N 张）
+      // Distinguish two kinds of stage_complete:
+      //   - First entry: snapshots[snap.stage] was previously null
+      //     → switch to this stage + reset to first item + pop banner / log / arm approve
+      //   - Post-edit refresh: after apply_edit succeeds, the server re-broadcasts the same stage's snapshot
+      //     → preserve the user's activeItemIdx (if they were editing slide N, they should stay on slide N after submit)
       const wasAlreadyCached = (snapshots[snap.stage] != null);
       // Cache + mark completed + advance running indicator.
       snapshots[snap.stage] = snap;
@@ -4080,9 +4088,9 @@ ws.onmessage = (event) => {
         }
       }
       if (!wasAlreadyCached) {
-        // 首次进入：自动切焦点 + 重置 item + 武装 Approve/Cancel。
-        // 即使后续用户切到别的 stage tab 浏览历史，pendingGateStage
-        // 仍指向这里直到下个 stage_complete 来。
+        // First entry: auto-switch focus + reset item + arm Approve/Cancel.
+        // Even if the user later switches to another stage tab to browse history,
+        // pendingGateStage still points here until the next stage_complete arrives.
         activeStage = snap.stage;
         activeItemIdx = 0;
         pendingGateStage = snap.stage;
@@ -4119,9 +4127,9 @@ ws.onmessage = (event) => {
           "ok",
         );
       } else {
-        // 编辑后 refresh：只更新缓存 + 重画当前 preview。
-        // 不切 stage（用户本来就在这个 stage）、不重置 item（保留用户选择）、
-        // 不弹 banner（避免每次微调都闪一下）。
+        // Post-edit refresh: only update cache + redraw the current preview.
+        // Don't switch stage (user is already in this stage), don't reset item (preserve user's choice),
+        // don't pop banner (avoid flashing on every micro-edit).
         renderAll();
       }
       break;
@@ -4202,7 +4210,7 @@ ws.onmessage = (event) => {
       break;
     }
     case "edit_applied": {
-      // Remove the local "正在生成回复…" marker now that the real
+      // Remove the local "Generating response…" marker now that the real
       // response (applied/rejected/etc.) is being appended below.
       // Runs even for no_op acks — the whole point of sending the
       // ack is to clear this indicator without flipping state.
@@ -4330,10 +4338,10 @@ ws.onmessage = (event) => {
       //
       // Drop the pending marker (if still present — typically the
       // cancel round-trip lands before any applied/rejected follows)
-      // then append a grey "（已取消）" marker so the chat log shows
+      // then append a grey "(canceled)" marker so the chat log shows
       // what the user attempted. The just-sent user message stays
       // above it (already echoed locally on send) so the conversation
-      // reads naturally: "user: 把标题改成红色 → （已取消）".
+      // reads naturally: "user: change the title to red → (canceled)".
       if (msg.ref_id) clearPendingAssistant(msg.ref_id);
       if (msg.ref_id && msg.ref_id === activeEditRefId) {
         clearEditInProgress();
@@ -4342,13 +4350,13 @@ ws.onmessage = (event) => {
         // if the user switched targets mid-edit.
         const path = resolveResponsePath(msg);
         if (path.length > 0) {
-          appendChatEntry(path, "cancelled", "（已取消）");
+          appendChatEntry(path, "cancelled", "(canceled)");
         } else {
           // Last-resort fallback: assume the active target is where the
           // edit was happening. Pre-fix behaviour.
           const target = getActiveTarget();
           if (target) {
-            appendChatEntry(target.path, "cancelled", "（已取消）");
+            appendChatEntry(target.path, "cancelled", "(canceled)");
           }
         }
       }
@@ -5358,7 +5366,7 @@ async function syncStatusOnLoad() {
   // sees a stale message after refresh.
   showScreen(status.state);
   if (status.state === "running" || status.state === "starting") {
-    setStatusBanner("Pipeline 仍在后台运行 — resuming...");
+    setStatusBanner("Pipeline still running in the background — resuming...");
   } else if (status.state === "failed") {
     setStatusBanner(
       status.error ? `Pipeline failed: ${status.error}` : "Pipeline failed.",
@@ -5806,7 +5814,7 @@ function renderHistoryPanel(entries) {
       </div>`;
     }).join("");
   }
-  // 如果 History tab 不是当前激活的，且有新增条目，给 tab 加 pulse 提示。
+  // If the History tab isn't currently active and there are new entries, pulse the tab to alert the user.
   const historyTab = document.querySelector('.sidebar-tab[data-sidebar-tab="history"]');
   if (historyTab && newCount > prevCount) {
     const isActive = historyTab.classList.contains("active");
@@ -5889,7 +5897,7 @@ document.querySelectorAll(".sidebar-tab").forEach(btn => {
       const isActive = b === btn;
       b.classList.toggle("active", isActive);
       b.setAttribute("aria-selected", isActive ? "true" : "false");
-      // 切到某 tab 时清除该 tab 的「有新内容」提示
+      // When switching to a tab, clear its "has new content" indicator
       if (isActive) b.classList.remove("has-new");
     });
     document.querySelectorAll("[data-sidebar-body]").forEach(body => {

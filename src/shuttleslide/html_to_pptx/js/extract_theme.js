@@ -1,12 +1,12 @@
 /**
- * extract_theme.js — Playwright 注入脚本
+ * extract_theme.js — Playwright injection script
  *
- * 从渲染后的 DOM 中提取主题信息：
- * - primary_color: 第一个渐变色（通常是品牌色）
- * - accent_color: 出现频率最高的非灰/非黑/非白色
- * - bg_color: .ppt-slide 容器的背景色
- * - text_color: 最常见的文字颜色
- * - font_title / font_body: 最常用的字体
+ * Extracts theme information from the rendered DOM:
+ * - primary_color: the first gradient color (usually the brand color)
+ * - accent_color: the most frequent non-gray / non-black / non-white color
+ * - bg_color: background color of the .ppt-slide container
+ * - text_color: the most common text color
+ * - font_title / font_body: the most-used fonts
  */
 (() => {
     function rgbToHex(rgb) {
@@ -19,7 +19,7 @@
         return `#${r}${g}${b}`;
     }
 
-    // 判断是否为灰色/黑色/白色（忽略）
+    // Determine whether a color is gray/black/white (to be ignored)
     function isNeutralColor(hex) {
         if (!hex || hex.length < 7) return true;
         const r = parseInt(hex.slice(1, 3), 16);
@@ -27,10 +27,10 @@
         const b = parseInt(hex.slice(5, 7), 16);
         const max = Math.max(r, g, b);
         const min = Math.min(r, g, b);
-        // 饱和度很低 或 很亮/很暗
-        if (max - min < 30) return true; // 近灰色
-        if (max > 230 && min > 230) return true; // 近白色
-        if (max < 30) return true; // 近黑色
+        // Very low saturation, or very bright/very dark
+        if (max - min < 30) return true; // near gray
+        if (max > 230 && min > 230) return true; // near white
+        if (max < 30) return true; // near black
         return false;
     }
 
@@ -44,11 +44,11 @@
     for (const el of slideEl.querySelectorAll('*')) {
         const s = getComputedStyle(el);
 
-        // 收集渐变色 → primary_color 候选
+        // Collect gradient colors → primary_color candidates
         if (s.backgroundImage && s.backgroundImage.includes('linear-gradient')) {
             const hexColors = s.backgroundImage.match(/#[0-9a-fA-F]{6,8}/g);
             if (hexColors) gradientColors.push(...hexColors.slice(0, 6).map(c => c.slice(0, 7)));
-            // 也提取 rgba 颜色
+            // Also extract rgba colors
             const rgbaMatches = s.backgroundImage.matchAll(/rgba?\((\d+),\s*(\d+),\s*(\d+)/g);
             for (const m of rgbaMatches) {
                 const hex = '#' +
@@ -59,19 +59,19 @@
             }
         }
 
-        // 统计背景色（非灰/非白）
+        // Tally background colors (non-gray / non-white)
         const bgColor = rgbToHex(s.backgroundColor);
         if (bgColor && !isNeutralColor(bgColor)) {
             colorCounts[bgColor] = (colorCounts[bgColor] || 0) + 1;
         }
 
-        // 统计文字颜色
+        // Tally text colors
         const textColor = rgbToHex(s.color);
         if (textColor && !isNeutralColor(textColor)) {
             colorCounts[textColor] = (colorCounts[textColor] || 0) + 1;
         }
 
-        // 统计字体
+        // Tally fonts
         const ff = s.fontFamily;
         if (ff) {
             const mainFont = ff.split(',')[0].trim().replace(/"/g, '');
@@ -79,19 +79,19 @@
         }
     }
 
-    // primary_color: 第一个渐变色
+    // primary_color: first gradient color
     const primaryColor = gradientColors[0] || '#133EFF';
 
-    // accent_color: 出现频率最高的非中性色
+    // accent_color: most frequent non-neutral color
     const sortedColors = Object.entries(colorCounts)
         .sort((a, b) => b[1] - a[1])
         .map(([c]) => c);
     const accentColor = sortedColors.find(c => c !== primaryColor) || '#00CD82';
 
-    // bg_color: slide 容器背景色
+    // bg_color: slide container background color
     const bgColor = rgbToHex(slideStyle.backgroundColor) || '#FEFEFE';
 
-    // 最常用的字体
+    // Most-used font
     const sortedFonts = Object.entries(fontFamilies)
         .sort((a, b) => b[1] - a[1])
         .map(([f]) => f);

@@ -1,10 +1,10 @@
 /**
- * extract_background.js — Playwright 注入脚本
+ * extract_background.js — Playwright injection script
  *
- * 提取 .ppt-slide 容器的背景属性：
- * - 背景色
- * - 渐变（解析 linear-gradient）
- * - 背景图片 URL
+ * Extracts background properties of the .ppt-slide container:
+ * - background color
+ * - gradient (parses linear-gradient)
+ * - background image URL
  */
 (() => {
     const slideEl = document.querySelector('.ppt-slide') || document.body;
@@ -45,7 +45,7 @@
         return { direction, stops };
     }
 
-    // 提取背景图片 URL（如果有 url(...)）
+    // Extract background image URL (if url(...) is present)
     function extractImageUrl(bgImage) {
         if (!bgImage || bgImage === 'none') return null;
         const urlMatch = bgImage.match(/url\(["']?([^"')]+)["']?\)/);
@@ -56,7 +56,7 @@
     const gradient = parseGradient(style.backgroundImage);
     const imageUrl = extractImageUrl(style.backgroundImage);
 
-    // 也检查 inline style 和 class 上的背景
+    // Also check inline style and class-level background
     const inlineBg = slideEl.style.background || slideEl.style.backgroundColor;
     const inlineBgImage = slideEl.style.backgroundImage;
 

@@ -449,7 +449,7 @@ class ReviewServer:
         yet (first stage still mid-execution), returning this dir lets
         ``/api/state`` serve canvas dims + an empty snapshot list so the
         UI shows "Pipeline still starting" rather than hydrating the
-        PREVIOUS run's snapshots — which was the "刷新后进入了另外的项目"
+        PREVIOUS run's snapshots — which was the "refresh landed in a different project"
         bug.
 
         Falls back to the NEWEST prior run on disk that has state only
@@ -1846,7 +1846,7 @@ class ReviewServer:
                 ws,
                 EditRejectedMsg(
                     ref_id=msg.get("ref_id", ""),
-                    error="另一个修改正在进行中，请等待或取消后再试",
+                    error="Another edit is in progress; please wait or cancel it first",
                 ),
             )
             return
@@ -2096,7 +2096,7 @@ class ReviewServer:
         if result.no_op:
             # Editor reported new_value == current_value: no undo entry
             # pushed, no stage_complete broadcast. But the client may have
-            # a pending "正在生成回复…" indicator (LLM mode) or open edit
+            # a pending "Generating response…" indicator (LLM mode) or open edit
             # toolbar (direct mode) waiting for an ack — silent skip
             # leaves those hanging. Send an explicit no_op ack so the
             # client clears local UI state without flipping the "edited"
@@ -2179,7 +2179,7 @@ class ReviewServer:
             # The orchestrator already broadcast chat_history with the
             # assistant_msg ("No change applied — the model finished
             # without editing..."), so the reply is visible — but the
-            # client's "正在生成回复…" pending indicator is waiting on
+            # client's "Generating response…" pending indicator is waiting on
             # exactly one of edit_applied/edit_rejected/edit_cancelled.
             # Silent skip leaves it stuck. Send a no_op ack so the
             # frontend clears pending without flipping the edited flag.

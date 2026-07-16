@@ -46,7 +46,7 @@ EA_FONTS = {
     'Songti SC', 'Songti TC',
     # Windows 10/11 + Office default / common Simplified Chinese
     'DengXian', 'DengXian Light', 'DengXian Bold', 'Microsoft YaHei UI',
-    # Office display Chinese (华文 / 方正) — usually title-only, not on every client
+    # Office display Chinese (SinoType / FangZheng families) — usually title-only, not on every client
     'STXingkai', 'STLiti', 'STXinwei', 'STHupo', 'STCaiyun',
     'FZShuTi', 'FZYaoti',
     # Common Traditional Chinese (Office)

@@ -19,7 +19,7 @@ def _sanitize_temperature(t: float) -> float:
 
     Many OpenAI-compatible providers (notably Zhipu GLM) reject
     temperatures with more than 2 decimal places and return
-    HTTP 400 ``temperature参数非法：限制小数点[2]位``. This bites when
+    HTTP 400 ``Invalid temperature parameter: limited to 2 decimal places``. This bites when
     callers do floating-point arithmetic like ``temp + 0.1`` —
     ``0.7 + 0.1`` evaluates to ``0.7999999999999999`` in IEEE 754.
 
@@ -141,12 +141,12 @@ class LLMClient:
 
     async def chat_with_tools(
         self,
-        messages: List[Dict[str, Any]],  # 消息列表，包含对话历史
-        tools: Optional[List[Dict[str, Any]]] = None,  # 可选的工具定义列表
-        temperature: float = 0.7,  # 温度参数，控制输出的随机性
-        max_tokens: Optional[int] = 4096,  # 生成的最大令牌数；None = 不限制
-        tool_choice: str = "auto",  # 工具选择策略，默认为自动选择
-    ) -> LLMResponse:  # 返回类型为LLMResponse
+        messages: List[Dict[str, Any]],  # message list including conversation history
+        tools: Optional[List[Dict[str, Any]]] = None,  # optional tool definitions
+        temperature: float = 0.7,  # temperature parameter controlling output randomness
+        max_tokens: Optional[int] = 4096,  # max tokens to generate; None = unlimited
+        tool_choice: str = "auto",  # tool choice strategy; defaults to auto
+    ) -> LLMResponse:  # return type is LLMResponse
         """Call the model with optional tool definitions.
 
         Returns a parsed LLMResponse. Even when the model emits tool calls,
@@ -170,10 +170,10 @@ class LLMClient:
         wrapper entirely fixes all four at once and makes the three entry
         points behave identically.
         """
-        client = self._get_async()  # 获取异步客户端
-        kwargs: Dict[str, Any] = dict(  # 构建请求参数字典
-            model=self.model,  # 使用的模型名称
-            messages=messages,  # 对话消息列表
+        client = self._get_async()  # get async client
+        kwargs: Dict[str, Any] = dict(  # build request kwargs
+            model=self.model,  # model name
+            messages=messages,  # conversation message list
             temperature=_sanitize_temperature(temperature),
         )
         if max_tokens is not None:

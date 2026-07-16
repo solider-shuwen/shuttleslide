@@ -1109,7 +1109,14 @@ class InteractiveOrchestrator(AgentOrchestrator):
             # Refresh downstream views so the UI shows the new value.
             await self._refresh_after_edit(stage, self._active_state)
             await self._broadcast_history()
-            await self._broadcast_stale_marks()
+            # Gate the stale-marks broadcast on whether this regen actually
+            # mutated stale state. Read-only regens (e.g. voice:preview:<id>
+            # which only writes a sample-audio path) must not push a
+            # stale_marks refresh — doing so resurfaces pre-existing marks
+            # as a misleading "This item may be out of date" banner.
+            # Mirrors the edit path's marks_changed gate at line 826.
+            if result.marks_changed:
+                await self._broadcast_stale_marks()
 
             # ItemRegeneratedMsg — only if broadcaster supports it.
             if self.broadcaster is not None:
